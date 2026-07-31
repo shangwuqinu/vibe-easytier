@@ -1,0 +1,27 @@
+panic occurred, if this is a bug, please report this issue on github (https://github.com/easytier/easytier/issues)
+    easytier version: 2.6.4-8428a89d
+    os: windows
+    arch: x86_64
+    panic is recorded in: easytier-panic.log
+    thread: main
+    time: 2026-07-31 13:44:54.824290600 +08:00
+    location: easytier\src\common\config.rs:636:75
+    panic info: called `Result::unwrap()` on an `Err` value: Error("invalid type: string \"none\", expected i32", line: 0, column: 0)
+======================================================================
+Backtrace [
+    { fn: "BaseThreadInitThunk" },
+    { fn: "RtlUserThreadStart" },
+]panic occurred, if this is a bug, please report this issue on github (https://github.com/easytier/easytier/issues)
+    easytier version: 2.6.4-8428a89d
+    os: windows
+    arch: x86_64
+    panic is recorded in: easytier-panic.log
+    thread: main
+    time: 2026-07-31 13:44:55.275575900 +08:00
+    location: easytier\src\common\config.rs:636:75
+    panic info: called `Result::unwrap()` on an `Err` value: Error("invalid type: string \"zstd\", expected i32", line: 0, column: 0)
+======================================================================
+Backtrace [
+    { fn: "BaseThreadInitThunk" },
+    { fn: "RtlUserThreadStart" },
+]

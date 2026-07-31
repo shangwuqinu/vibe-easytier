@@ -1,0 +1,29 @@
+# JavaScript
+node_modules/
+dist/
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/output/
+.playwright-cli/
+output/
+
+# Rust
+target/
+src-tauri/target/
+
+# Packaged runtime and local data
+resources/easytier/*.exe
+resources/easytier/*.dll
+resources/easytier/*.zip
+resources/easytier/runtime-manifest.local.json
+
+# Local tooling and editor state
+.env
+.env.*
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Windows installer output
+installer/out/

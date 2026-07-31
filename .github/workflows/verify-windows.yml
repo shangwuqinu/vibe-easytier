@@ -1,0 +1,70 @@
+name: Verify Windows Client
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Verify frontend
+        working-directory: apps/desktop
+        run: |
+          npm run build
+          npm test
+
+      - name: Format and test Rust service
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p vibe-easytier-service
+
+      - name: Build release service host
+        run: cargo build --release -p vibe-easytier-service
+
+      - name: Fetch and validate pinned runtime
+        shell: pwsh
+        run: |
+          ./scripts/Fetch-EasyTierRuntime.ps1 -Architecture x64
+          ./scripts/Stage-VibeEasyTierService.ps1 -Architecture x64
+          ./scripts/Test-EasyTierPackaging.ps1 -Architecture x64 -RequireRuntime -RequireServiceBinary -VerifyReleaseMetadata
+
+      - name: Build NSIS installer
+        working-directory: src-tauri
+        run: npm --prefix ../apps/desktop exec -- tauri build --bundles nsis
+
+      - name: Assert NSIS installer artifact
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path .\target\release\bundle\nsis -Filter '*.exe' -File -Recurse | Select-Object -First 1
+          if ($null -eq $installer) {
+            throw 'Tauri did not emit an NSIS installer artifact.'
+          }
+          Write-Output "Built NSIS installer: $($installer.FullName)"
+
+      - name: Smoke test fresh install, upgrade, and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path .\target\release\bundle\nsis -Filter '*.exe' -File -Recurse | Select-Object -First 1
+          .\scripts\Invoke-EasyTierInstallerSmoke.ps1 -InstallerPath $installer.FullName

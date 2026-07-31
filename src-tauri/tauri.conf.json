@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Vibe EasyTier",
+  "version": "0.1.0",
+  "identifier": "io.vibe.easytier",
+  "build": {
+    "beforeDevCommand": "npm --prefix apps/desktop run dev -- --host 127.0.0.1",
+    "beforeBuildCommand": "npm --prefix apps/desktop run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../apps/desktop/dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Vibe EasyTier",
+        "width": 1320,
+        "height": 840,
+        "minWidth": 980,
+        "minHeight": 640,
+        "decorations": false,
+        "transparent": false,
+        "resizable": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../resources/easytier/windows-x64": "resources/easytier",
+      "../resources/service/windows-x64": "resources/service",
+      "../resources/easytier-runtime.manifest.json": "resources/easytier-runtime.manifest.json",
+      "../scripts/Register-EasyTierService.ps1": "resources/scripts/Register-EasyTierService.ps1",
+      "../scripts/Unregister-EasyTierService.ps1": "resources/scripts/Unregister-EasyTierService.ps1",
+      "../scripts/Remove-VibeEasyTierState.ps1": "resources/scripts/Remove-VibeEasyTierState.ps1"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "../installer/tauri-nsis-hooks.nsh",
+        "template": "../installer/tauri-nsis.template.nsi",
+        "installMode": "perMachine",
+        "compression": "lzma",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

@@ -1,0 +1,41 @@
+[package]
+name = "vibe-easytier-service"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Privileged Windows service backend for Vibe EasyTier"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "vibe_easytier_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vibe-easytier-service"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+ctrlc = "3.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+toml = "0.8"
+url = "2.5"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.7"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Services",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }

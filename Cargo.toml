@@ -1,0 +1,23 @@
+[workspace]
+members = [
+  "src-tauri",
+  "crates/vibe-easytier-service",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["Vibe EasyTier Contributors"]
+repository = "https://github.com/example/vibe-easytier"
+
+[workspace.dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "sync", "time", "process", "net", "io-util", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.16", features = ["v4", "serde"] }

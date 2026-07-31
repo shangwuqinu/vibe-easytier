@@ -1,0 +1,23 @@
+{
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "resources": {
+      "../resources/easytier/windows-arm64": "resources/easytier",
+      "../resources/service/windows-arm64": "resources/service",
+      "../scripts/Register-EasyTierService.ps1": "resources/scripts/Register-EasyTierService.ps1",
+      "../scripts/Unregister-EasyTierService.ps1": "resources/scripts/Unregister-EasyTierService.ps1",
+      "../scripts/Remove-VibeEasyTierState.ps1": "resources/scripts/Remove-VibeEasyTierState.ps1"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "compression": "lzma",
+        "displayLanguageSelector": false,
+        "installerHooks": "../installer/tauri-nsis-hooks.nsh",
+        "template": "../installer/tauri-nsis.template.nsi"
+      }
+    }
+  }
+}
