@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { canConnect } from '../lib/connection'
 import { getCoreBridge, hasNativeBridge, makeLog } from '../lib/bridge'
+import { getErrorMessage } from '../lib/error'
 import type {
+  BandwidthTestResult,
   DesktopSnapshot,
   EasyTierFlags,
   NetworkProfile,
@@ -319,30 +321,85 @@ export const useDesktopState = () => {
   )
 
   const importProfile = useCallback(
-    async (toml: string) => {
+    async () => {
       const bridge = getCoreBridge()
-      if (!bridge?.importProfile) {
-        throw new Error('仅原生 Vibe EasyTier 桌面应用支持导入档案。')
+      if (!bridge?.importProfileFromFile) {
+        throw new Error('仅原生 Vibe EasyTier 桌面应用支持从本地文件导入档案。')
       }
-      const saved = await bridge.importProfile(toml)
-      mutate((current) => {
-        const exists = current.profiles.some((item) => item.id === saved.id)
-        const profiles = exists
-          ? current.profiles.map((item) => (item.id === saved.id ? saved : item))
-          : [saved, ...current.profiles]
-        return {
-          ...current,
-          profiles,
-          runtime: {
-            ...current.runtime,
-            activeProfileId: current.runtime.activeProfileId ?? saved.id,
-          },
-        }
-      })
-      appendLog(makeLog('success', 'Desktop', `已导入档案 ${saved.name}。`))
-      return saved
+      try {
+        const saved = await bridge.importProfileFromFile()
+        if (!saved) return null
+        mutate((current) => {
+          const exists = current.profiles.some((item) => item.id === saved.id)
+          const profiles = exists
+            ? current.profiles.map((item) => (item.id === saved.id ? saved : item))
+            : [saved, ...current.profiles]
+          return {
+            ...current,
+            profiles,
+            runtime: {
+              ...current.runtime,
+              activeProfileId: current.runtime.activeProfileId ?? saved.id,
+            },
+          }
+        })
+        appendLog(makeLog('success', 'Desktop', `已从本地文件导入档案 ${saved.name}。`))
+        return saved
+      } catch (error) {
+        const message = getErrorMessage(error, '从本地文件导入 TOML 失败。')
+        appendLog(makeLog('error', 'Desktop', message))
+        throw new Error(message)
+      }
     },
     [appendLog, mutate],
+  )
+
+  const exportProfile = useCallback(
+    async (profileId: string) => {
+      const bridge = getCoreBridge()
+      if (!bridge?.exportProfile) {
+        const message = '仅原生 Vibe EasyTier 桌面应用支持导出 TOML。'
+        appendLog(makeLog('warning', 'Desktop', message))
+        throw new Error(message)
+      }
+
+      try {
+        const path = await bridge.exportProfile(profileId)
+        if (path) {
+          appendLog(makeLog('success', 'Desktop', `档案已导出到 ${path}。`))
+        }
+        return path
+      } catch (error) {
+        const message = getErrorMessage(error, '导出 TOML 失败。')
+        appendLog(makeLog('error', 'Desktop', message))
+        throw new Error(message)
+      }
+    },
+    [appendLog],
+  )
+
+  const runBandwidthTest = useCallback(
+    async (peerId: string): Promise<BandwidthTestResult> => {
+      const bridge = getCoreBridge()
+      if (!bridge?.runBandwidthTest) {
+        const message = '当前安装的后台服务不支持节点间带宽测试。'
+        appendLog(makeLog('warning', 'Desktop', message))
+        throw new Error(message)
+      }
+
+      const peerName = snapshot.peers.find((peer) => peer.id === peerId)?.name ?? '目标节点'
+      appendLog(makeLog('info', 'Desktop', `正在测试与 ${peerName} 之间的带宽。`))
+      try {
+        const result = await bridge.runBandwidthTest(peerId)
+        appendLog(makeLog('success', 'Desktop', `与 ${peerName} 的带宽测试已完成。`))
+        return result
+      } catch (error) {
+        const message = getErrorMessage(error, '节点间带宽测试失败。')
+        appendLog(makeLog('error', 'Desktop', message))
+        throw new Error(message)
+      }
+    },
+    [appendLog, snapshot.peers],
   )
 
   const deleteProfile = useCallback(
@@ -491,6 +548,8 @@ export const useDesktopState = () => {
     saveProfile,
     updateProfileFlags,
     importProfile,
+    exportProfile,
+    runBandwidthTest,
     deleteProfile,
     selectProfile,
     setAutoConnect,

@@ -44,6 +44,11 @@ pub struct HealthSample {
     /// `connected_peer_count`. `None` means the CLI output was unavailable or
     /// could not be parsed, while `Some(vec![])` is a confirmed empty list.
     pub connected_peers: Option<Vec<ConnectedPeer>>,
+    /// Number of entries returned by `easytier-cli route list`.
+    pub route_count: Option<usize>,
+    /// Host-originated payload counters from EasyTier's statistics registry.
+    pub traffic_tx_bytes: Option<u64>,
+    pub traffic_rx_bytes: Option<u64>,
 }
 
 impl HealthSample {
@@ -534,6 +539,9 @@ mod tests {
             private_network_reachable: Some(false),
             connected_peer_count: None,
             connected_peers: None,
+            route_count: None,
+            traffic_tx_bytes: None,
+            traffic_rx_bytes: None,
         };
 
         assert_eq!(
@@ -576,6 +584,9 @@ mod tests {
             private_network_reachable: None,
             connected_peer_count: Some(0),
             connected_peers: Some(Vec::new()),
+            route_count: Some(1),
+            traffic_tx_bytes: Some(0),
+            traffic_rx_bytes: Some(0),
         };
 
         assert_eq!(

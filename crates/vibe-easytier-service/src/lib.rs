@@ -4,6 +4,7 @@
 //! process.  This crate owns the durable desired state and exposes a small,
 //! local-only protocol for a Windows service host.
 
+pub mod bandwidth;
 pub mod crypto;
 pub mod ipc;
 pub mod network;

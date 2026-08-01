@@ -42,6 +42,21 @@ export const formatBytes = (bytes: number) => {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`
 }
 
+export const formatBitsPerSecond = (bitsPerSecond: number) => {
+  const value = Number.isFinite(bitsPerSecond) ? Math.max(0, bitsPerSecond) : 0
+  if (value < 1000) return `${Math.round(value)} bps`
+  const units = ['Kbps', 'Mbps', 'Gbps', 'Tbps']
+  let scaled = value / 1000
+  let unit = 0
+
+  while (scaled >= 1000 && unit < units.length - 1) {
+    scaled /= 1000
+    unit += 1
+  }
+
+  return `${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)} ${units[unit]}`
+}
+
 export const formatDuration = (startedAt: string | null, now = Date.now()) => {
   if (!startedAt) return '--'
   const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000))

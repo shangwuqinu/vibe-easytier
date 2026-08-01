@@ -47,9 +47,17 @@ describe('LogsPage', () => {
 
 describe('PeersPage', () => {
   it('renders every active transport for a remote peer as a separate protocol chip', () => {
-    const markup = renderToStaticMarkup(<PeersPage peers={peers} onOpenNetwork={() => undefined} />)
+    const markup = renderToStaticMarkup(
+      <PeersPage
+        peers={peers}
+        onOpenNetwork={() => undefined}
+        onRunBandwidthTest={() => Promise.reject(new Error('not run during rendering'))}
+      />,
+    )
 
     expect(markup).toContain('连接协议')
+    expect(markup).toContain('带宽测试')
+    expect(markup).toContain('测速')
     expect(markup).toContain('TCP')
     expect(markup).toContain('WireGuard')
     expect((markup.match(/peer-protocol-chip/g) ?? [])).toHaveLength(2)

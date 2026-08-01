@@ -70,6 +70,12 @@ not SCM or the desktop UI, owns easytier-core.exe and the generated runtime
 TOML. Do not use a second user-login auto-launcher for easytier-core.exe; it
 would create competing instances with the boot service.
 
+Registration also creates the program-scoped inbound TCP 29999 firewall rule
+used by node-to-node bandwidth tests. The listener binds only to the active
+EasyTier virtual IPv4 address. Upgrades replace the rule in place; a real
+uninstall removes it, while `-KeepRegistration` preserves it during the
+PREINSTALL stop window.
+
 The uninstaller removes the service, then deletes the protected
 %ProgramData%\VibeEasyTier state directory. Both Tauri `/UPDATE` and an
 interactive upgrade remain in place until PREINSTALL stops the old service and

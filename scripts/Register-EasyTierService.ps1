@@ -27,6 +27,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$BandwidthTestPort = 29999
+$BandwidthFirewallRuleName = "$ServiceName-BandwidthTest"
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -131,6 +133,38 @@ function Protect-StateDirectory {
     }
 
     Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Set-BandwidthFirewallRule {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProgramPath
+    )
+
+    if ($DryRun) {
+        Write-Output "DRY-RUN: allow inbound TCP $BandwidthTestPort for $ProgramPath in firewall rule $BandwidthFirewallRuleName"
+        return
+    }
+
+    try {
+        Remove-NetFirewallRule -Name $BandwidthFirewallRuleName -ErrorAction SilentlyContinue
+        New-NetFirewallRule `
+            -Name $BandwidthFirewallRuleName `
+            -DisplayName "$DisplayName - Bandwidth Test" `
+            -Description 'Allows authenticated EasyTier peers to run the Vibe EasyTier bandwidth test.' `
+            -Direction Inbound `
+            -Action Allow `
+            -Enabled True `
+            -Profile Any `
+            -Protocol TCP `
+            -LocalPort $BandwidthTestPort `
+            -Program $ProgramPath | Out-Null
+    }
+    catch {
+        # Bandwidth testing is optional. A managed firewall policy must not
+        # prevent the boot service and automatic private-network connection.
+        Write-Warning 'The bandwidth-test firewall rule could not be configured. Node bandwidth tests may be blocked.'
+    }
 }
 
 function Get-ServiceImagePath {
@@ -425,6 +459,7 @@ Invoke-Sc -Arguments @(
     'restart/5000/restart/15000/restart/60000'
 )
 Invoke-Sc -Arguments @('failureflag', $ServiceName, '1')
+Set-BandwidthFirewallRule -ProgramPath $ServiceBinaryPath
 
 if (-not $NoStart) {
     if ($DryRun) {

@@ -1076,7 +1076,7 @@ code {
 
 .peer-table {
   width: 100%;
-  min-width: 900px;
+  min-width: 1100px;
   border-collapse: collapse;
 }
 
@@ -1173,6 +1173,46 @@ code {
 }
 
 .peer-protocol-empty { color: var(--muted); }
+
+.bandwidth-button {
+  min-width: 76px;
+}
+
+.bandwidth-result,
+.bandwidth-error {
+  display: grid;
+  min-width: 165px;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 3px 7px;
+}
+
+.bandwidth-result > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.bandwidth-result > span:first-child { color: var(--primary-strong); }
+.bandwidth-result > span:nth-child(2) { color: var(--orange); }
+.bandwidth-result > .icon-button,
+.bandwidth-error > .icon-button { grid-column: 2; grid-row: 1 / span 2; }
+
+.bandwidth-error > span {
+  overflow-wrap: anywhere;
+  color: var(--red);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.spin { animation: spin 900ms linear infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
 .table-summary {
   display: inline-flex;
@@ -1587,7 +1627,6 @@ select.flag-field__input { cursor: pointer; }
 .field input { height: 37px; padding: 0 10px; }
 .field textarea { min-height: 82px; padding: 9px 10px; resize: vertical; }
 .field select { height: 37px; padding: 0 10px; }
-.field .import-toml { min-height: 260px; }
 .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--primary); box-shadow: var(--focus); }
 
 .field__hint,
@@ -1706,6 +1745,8 @@ select.flag-field__input { cursor: pointer; }
   .peer-table td:nth-child(odd) { border-right: 1px solid var(--border); }
   .peer-table td:nth-last-child(-n + 1), .peer-table td:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
   .peer-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 650; }
+  .peer-table td[data-label="带宽测试"] { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
+  .bandwidth-result, .bandwidth-error { width: 100%; min-width: 0; }
   .logs-surface { overflow: visible; border: 0; background: transparent; }
   .logs-page .log-list { display: grid; min-width: 0; gap: 8px; }
   .logs-page .log-row { min-height: 80px; grid-template-columns: 7px minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 5px 9px; padding: 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }

@@ -20,6 +20,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$BandwidthFirewallRuleName = "$ServiceName-BandwidthTest"
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -27,6 +28,15 @@ function Assert-Administrator {
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Administrator privileges are required to unregister a Windows service.'
     }
+}
+
+function Remove-BandwidthFirewallRule {
+    if ($DryRun) {
+        Write-Output "DRY-RUN: remove firewall rule $BandwidthFirewallRuleName"
+        return
+    }
+
+    Remove-NetFirewallRule -Name $BandwidthFirewallRuleName -ErrorAction SilentlyContinue
 }
 
 function Get-ServiceImagePath {
@@ -213,6 +223,12 @@ if ($null -eq $service) {
     if (Test-ServiceRegistrationExists -Name $ServiceName) {
         Wait-ServiceDeletion -Name $ServiceName -TimeoutSeconds $StopTimeoutSeconds
     }
+    if (-not $KeepRegistration) {
+        if (-not $DryRun) {
+            Assert-Administrator
+        }
+        Remove-BandwidthFirewallRule
+    }
     Write-Output "Service $ServiceName is not registered."
     return
 }
@@ -235,6 +251,7 @@ if ($DryRun) {
         return
     }
     Invoke-Sc -Arguments @('delete', $ServiceName)
+    Remove-BandwidthFirewallRule
     return
 }
 
@@ -256,4 +273,5 @@ if ($KeepRegistration) {
 
 Invoke-Sc -Arguments @('delete', $ServiceName)
 Wait-ServiceDeletion -Name $ServiceName -TimeoutSeconds $StopTimeoutSeconds
+Remove-BandwidthFirewallRule
 Write-Output "Unregistered $ServiceName. ProgramData state was not deleted."

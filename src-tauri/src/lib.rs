@@ -16,14 +16,17 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, State, WindowEvent,
 };
+use tauri_plugin_dialog::DialogExt;
 use vibe_easytier_service::service::{CORE_CONFIG_VALIDATION_ERROR_PREFIX, WINDOWS_SERVICE_NAME};
 use vibe_easytier_service::{
+    bandwidth::{run_bandwidth_test as measure_peer_bandwidth, DEFAULT_TEST_DURATION_SECONDS},
     AddressMode, ConnectedPeer, ConnectionIntent, EasyTierFlags, IpcClient, NetworkProfile,
     ProfileUpsert, RpcCommand, RpcRequest, RpcResult, SecretString, ServiceConnectionState,
     ServiceStatus,
 };
 
 const MAX_LOG_LINES: usize = 200;
+const MAX_IMPORT_TOML_BYTES: usize = 1024 * 1024;
 static NEXT_LOG_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -439,6 +442,18 @@ struct UiPeer {
     received: u64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UiBandwidthTestResult {
+    peer_id: String,
+    download_bps: u64,
+    upload_bps: u64,
+    download_bytes: u64,
+    upload_bytes: u64,
+    duration_seconds: u8,
+    tested_at: String,
+}
+
 impl From<ConnectedPeer> for UiPeer {
     fn from(peer: ConnectedPeer) -> Self {
         let name = peer.hostname.clone();
@@ -533,9 +548,9 @@ fn get_snapshot(state: State<'_, NativeState>) -> DesktopSnapshot {
             peer_count: status.peer_count,
             peer_count_available: status.peer_count_available,
             last_success_at: status.last_success_unix_ms.and_then(timestamp_to_iso),
-            routes: 0,
-            sent: 0,
-            received: 0,
+            routes: status.route_count.min(u32::MAX as usize) as u32,
+            sent: status.traffic_tx_bytes,
+            received: status.traffic_rx_bytes,
             daemon_version: "EasyTier Core 2.6.4（由服务管理）".to_owned(),
         },
         preferences: UiPreferences {
@@ -604,13 +619,136 @@ fn update_profile_flags(
     }
 }
 
-#[tauri::command]
-fn import_profile(state: State<'_, NativeState>, toml: String) -> Result<UiProfile, String> {
+fn import_profile_toml(state: &NativeState, toml: String) -> Result<UiProfile, String> {
     let make_active = state.service_status()?.active_profile_id.is_none();
     match state.rpc(RpcCommand::ImportProfile { toml, make_active })? {
         RpcResult::ProfileSaved(profile) => Ok(profile.into()),
         _ => Err("后台服务返回了无效的档案导入响应。".to_owned()),
     }
+}
+
+#[tauri::command]
+async fn import_profile_from_file(
+    app: tauri::AppHandle,
+    state: State<'_, NativeState>,
+) -> Result<Option<UiProfile>, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("EasyTier TOML", &["toml"])
+        .set_title("从本地导入 EasyTier TOML")
+        .blocking_pick_file();
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let path = selected
+        .into_path()
+        .map_err(|_| "选择的 TOML 文件路径无效。".to_owned())?;
+    let toml = read_import_toml(&path)?;
+    import_profile_toml(&state, toml).map(Some)
+}
+
+fn read_import_toml(path: &Path) -> Result<String, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|_| "无法读取所选 TOML 文件，请确认文件仍然存在且具有读取权限。".to_owned())?;
+    if metadata.len() > MAX_IMPORT_TOML_BYTES as u64 {
+        return Err("所选 TOML 文件超过 1 MB，无法导入。".to_owned());
+    }
+    let bytes = fs::read(path)
+        .map_err(|_| "无法读取所选 TOML 文件，请确认文件仍然存在且具有读取权限。".to_owned())?;
+    decode_import_toml(bytes)
+}
+
+fn decode_import_toml(bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.len() > MAX_IMPORT_TOML_BYTES {
+        return Err("所选 TOML 文件超过 1 MB，无法导入。".to_owned());
+    }
+    let toml =
+        String::from_utf8(bytes).map_err(|_| "所选 TOML 文件不是有效的 UTF-8 文本。".to_owned())?;
+    Ok(toml.strip_prefix('\u{feff}').unwrap_or(&toml).to_owned())
+}
+
+#[tauri::command]
+async fn export_profile_toml(
+    app: tauri::AppHandle,
+    state: State<'_, NativeState>,
+    profile_id: String,
+) -> Result<Option<String>, String> {
+    let profile = state
+        .profile_views()?
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| "要导出的档案不存在。".to_owned())?;
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("EasyTier TOML", &["toml"])
+        .set_title("导出完整配置（包含网络密钥）")
+        .set_file_name(export_file_name(&profile.name))
+        .blocking_save_file();
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let mut path = selected
+        .into_path()
+        .map_err(|_| "选择的导出路径无效。".to_owned())?;
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("toml"))
+    {
+        path.set_extension("toml");
+    }
+
+    let toml = match state.rpc(RpcCommand::ExportProfile {
+        profile_id: profile.id.clone(),
+    })? {
+        RpcResult::ProfileToml {
+            profile_id: exported_id,
+            toml,
+        } if exported_id == profile.id => toml,
+        _ => return Err("后台服务返回了无效的档案导出响应。".to_owned()),
+    };
+    fs::write(&path, toml.as_bytes()).map_err(|_| "无法写入导出的 TOML 文件。".to_owned())?;
+    Ok(Some(path.display().to_string()))
+}
+
+#[tauri::command]
+async fn run_peer_bandwidth_test(
+    state: State<'_, NativeState>,
+    peer_id: String,
+) -> Result<UiBandwidthTestResult, String> {
+    if state.service_status()?.state != ServiceConnectionState::Connected {
+        return Err("私有网络尚未连接，无法进行节点间带宽测试。".to_owned());
+    }
+    let peer = state
+        .connected_peers()?
+        .into_iter()
+        .find(|peer| peer.id == peer_id)
+        .ok_or_else(|| "目标节点已离线或不存在。".to_owned())?;
+    let peer_address = peer
+        .ipv4
+        .split('/')
+        .next()
+        .and_then(|address| address.parse().ok())
+        .ok_or_else(|| "目标节点没有可用的虚拟 IPv4 地址。".to_owned())?;
+
+    let measurement = tokio::task::spawn_blocking(move || {
+        measure_peer_bandwidth(peer_address, DEFAULT_TEST_DURATION_SECONDS)
+    })
+    .await
+    .map_err(|_| "带宽测试任务异常结束。".to_owned())?
+    .map_err(localize_bandwidth_error)?;
+
+    Ok(UiBandwidthTestResult {
+        peer_id,
+        download_bps: measurement.download_bps,
+        upload_bps: measurement.upload_bps,
+        download_bytes: measurement.download_bytes,
+        upload_bytes: measurement.upload_bytes,
+        duration_seconds: measurement.duration_seconds,
+        tested_at: now_iso(),
+    })
 }
 
 #[tauri::command]
@@ -710,20 +848,34 @@ fn service_logs(state: &NativeState) -> Result<Vec<UiLog>, String> {
     })? {
         RpcResult::Logs(lines) => Ok(lines
             .into_iter()
-            .map(|line| {
-                let lowered = line.line.to_ascii_lowercase();
-                let level = if lowered.contains(" error") || lowered.starts_with("error") {
-                    "error"
-                } else if lowered.contains(" warn") || lowered.starts_with("warn") {
-                    "warning"
-                } else {
-                    "info"
-                };
-                UiLog::new(level, "EasyTier Core", line.line)
-            })
+            .map(|line| UiLog::new(core_log_level(&line.line), "EasyTier Core", line.line))
             .collect()),
         _ => Err("后台服务返回了无效的日志响应。".to_owned()),
     }
+}
+
+fn core_log_level(message: &str) -> &'static str {
+    for token in message
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .filter(|token| !token.is_empty())
+    {
+        if token.eq_ignore_ascii_case("error") {
+            return "error";
+        }
+        if token.eq_ignore_ascii_case("warn") || token.eq_ignore_ascii_case("warning") {
+            return "warning";
+        }
+        if token.eq_ignore_ascii_case("info")
+            || token.eq_ignore_ascii_case("debug")
+            || token.eq_ignore_ascii_case("trace")
+        {
+            return "info";
+        }
+    }
+    "info"
 }
 
 fn unavailable_snapshot(
@@ -797,6 +949,94 @@ fn unix_millis() -> u128 {
 
 fn now_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn export_file_name(profile_name: &str) -> String {
+    let sanitized = profile_name
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let mut stem = sanitized.trim().trim_end_matches([' ', '.']);
+    if stem
+        .get(stem.len().saturating_sub(5)..)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(".toml"))
+    {
+        stem = stem[..stem.len() - 5].trim_end_matches([' ', '.']);
+    }
+    let truncated = stem.chars().take(96).collect::<String>();
+    let truncated = truncated.trim_end_matches([' ', '.']);
+    let mut stem = if truncated.is_empty() {
+        "easytier-profile".to_owned()
+    } else {
+        truncated.to_owned()
+    };
+    let reserved_base = stem
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if matches!(
+        reserved_base.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        stem.insert(0, '_');
+    }
+    format!("{stem}.toml")
+}
+
+/// Network errors are reduced to stable Chinese messages. The raw OS error
+/// can include adapter details or addresses that should not enter the webview.
+fn localize_bandwidth_error(error: std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::ConnectionRefused
+        | std::io::ErrorKind::TimedOut
+        | std::io::ErrorKind::NotConnected
+        | std::io::ErrorKind::AddrNotAvailable => {
+            "无法连接目标节点的带宽测试服务，请确认对方已升级到相同版本，且防火墙允许节点间测速。"
+                .to_owned()
+        }
+        std::io::ErrorKind::ConnectionReset
+        | std::io::ErrorKind::BrokenPipe
+        | std::io::ErrorKind::UnexpectedEof => {
+            "节点间带宽测试连接中断，请检查网络稳定性后重试。".to_owned()
+        }
+        std::io::ErrorKind::InvalidData => {
+            "目标节点的带宽测试协议不兼容，请升级对方客户端。".to_owned()
+        }
+        _ => "节点间带宽测试失败，请稍后重试。".to_owned(),
+    }
 }
 
 /// Service and Core errors are deliberately reduced to Chinese user-facing
@@ -1066,7 +1306,9 @@ pub fn run() {
             get_snapshot,
             save_profile,
             update_profile_flags,
-            import_profile,
+            import_profile_from_file,
+            export_profile_toml,
+            run_peer_bandwidth_test,
             delete_profile,
             select_active_profile,
             connect,
@@ -1091,6 +1333,61 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_file_name_is_safe_for_windows_and_keeps_a_toml_extension() {
+        assert_eq!(export_file_name(" 办公网:华东? "), "办公网_华东_.toml");
+        assert_eq!(export_file_name("..."), "easytier-profile.toml");
+        assert_eq!(export_file_name("a/b\\c\n"), "a_b_c_.toml");
+        assert_eq!(export_file_name("office.TOML"), "office.toml");
+        assert_eq!(export_file_name("CON.txt"), "_CON.txt.toml");
+    }
+
+    #[test]
+    fn bandwidth_errors_are_localized_without_rendering_os_details() {
+        let error = std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "connect to 100.64.0.8:29999 failed",
+        );
+        let message = localize_bandwidth_error(error);
+
+        assert!(message.contains("目标节点"));
+        assert!(!message.contains("100.64.0.8"));
+        assert!(!message.contains("29999"));
+    }
+
+    #[test]
+    fn multiline_info_log_keeps_the_level_from_its_first_line() {
+        let message = concat!(
+            "2026-08-01T15:29:23.000Z INFO easytier::connector: lookup failed\n",
+            "    source: ResolveError {\n",
+            "        kind: ProtoError,\n",
+            "    }",
+        );
+
+        assert_eq!(core_log_level(message), "info");
+        assert_eq!(
+            core_log_level("2026-08-01T15:29:24.000Z WARN easytier: retry"),
+            "warning"
+        );
+        assert_eq!(
+            core_log_level("2026-08-01T15:29:25.000Z ERROR easytier: stopped"),
+            "error"
+        );
+    }
+
+    #[test]
+    fn local_toml_import_accepts_utf8_bom_and_rejects_unsafe_input_sizes() {
+        let decoded = decode_import_toml(b"\xef\xbb\xbfinstance_name = \"office\"\n".to_vec())
+            .expect("UTF-8 TOML with a BOM should be accepted");
+        assert_eq!(decoded, "instance_name = \"office\"\n");
+
+        let oversized = decode_import_toml(vec![b'x'; MAX_IMPORT_TOML_BYTES + 1]).unwrap_err();
+        assert!(oversized.contains("超过 1 MB"));
+
+        let invalid_utf8 = decode_import_toml(vec![0xff]).unwrap_err();
+        assert!(invalid_utf8.contains("UTF-8"));
+    }
 
     #[test]
     fn ui_flags_round_trip_all_core_fields_without_losing_large_limits() {

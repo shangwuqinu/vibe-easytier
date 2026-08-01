@@ -186,7 +186,19 @@ if ($unregisterScript.IndexOf('Wait-ServiceDeletion', [StringComparison]::Ordina
 if ($unregisterScript.IndexOf('KeepRegistration', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service removal must support upgrade-only stop behavior that preserves the established SCM registration.'
 }
+if ($registerScript.IndexOf('New-NetFirewallRule', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('29999', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Service registration must allow the node-to-node bandwidth test through Windows Firewall.'
+}
+if ($registerScript.IndexOf('Node bandwidth tests may be blocked.', [StringComparison]::Ordinal) -lt 0) {
+    throw 'A managed firewall policy must not prevent the boot service from being registered and started.'
+}
+if ($unregisterScript.IndexOf('Remove-BandwidthFirewallRule', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Service removal must clean up the node-to-node bandwidth firewall rule.'
+}
 foreach ($serviceScript in @($registerScript, $unregisterScript)) {
+    if ($serviceScript -match '[^\x00-\x7F]') {
+        throw 'Service scripts must remain ASCII so Windows PowerShell 5.1 cannot misparse UTF-8 text without a BOM.'
+    }
     if ($serviceScript -match '(?m)&\s*sc\.exe') {
         throw 'Service scripts must not directly invoke the console sc.exe process from the NSIS PowerShell host.'
     }

@@ -106,6 +106,16 @@ export interface Peer {
   received: number
 }
 
+export interface BandwidthTestResult {
+  peerId: string
+  downloadBps: number
+  uploadBps: number
+  downloadBytes: number
+  uploadBytes: number
+  durationSeconds: number
+  testedAt: string
+}
+
 export interface RuntimeState {
   phase: ConnectionPhase
   activeProfileId: string | null

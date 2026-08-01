@@ -23,10 +23,12 @@ use std::{
 use thiserror::Error;
 
 use crate::{
+    bandwidth::BandwidthBindTarget,
     crypto::{DpapiProtector, StateProtector},
     ipc::{RpcHandler, DEFAULT_PIPE_ENDPOINT},
     profile::{
-        EasyTierFlags, NetworkProfile, ProfileError, CORE_RPC_PORTAL, CORE_RPC_PORTAL_WHITELIST,
+        AddressMode, EasyTierFlags, NetworkProfile, ProfileError, CORE_RPC_PORTAL,
+        CORE_RPC_PORTAL_WHITELIST,
     },
     protocol::{
         ConnectedPeer, ConnectionIntent, ProfileSummary, ProfileUpsert, ProfileView, RpcCommand,
@@ -242,6 +244,9 @@ pub struct ServiceController<P> {
     core_pid: Option<u32>,
     observed_peer_count: Option<usize>,
     observed_peers: Option<Vec<ConnectedPeer>>,
+    observed_route_count: Option<usize>,
+    observed_traffic_tx_bytes: Option<u64>,
+    observed_traffic_rx_bytes: Option<u64>,
     last_success_unix_ms: Option<u64>,
     last_error: Option<String>,
     reconciliation_needed: bool,
@@ -298,6 +303,9 @@ impl<P: StateProtector> ServiceController<P> {
             core_pid: None,
             observed_peer_count: None,
             observed_peers: None,
+            observed_route_count: None,
+            observed_traffic_tx_bytes: None,
+            observed_traffic_rx_bytes: None,
             last_success_unix_ms: None,
             last_error: None,
             reconciliation_needed: true,
@@ -334,6 +342,9 @@ impl<P: StateProtector> ServiceController<P> {
             consecutive_failures,
             peer_count: self.observed_peer_count.unwrap_or(0),
             peer_count_available: self.observed_peer_count.is_some(),
+            route_count: self.observed_route_count.unwrap_or(0),
+            traffic_tx_bytes: self.observed_traffic_tx_bytes.unwrap_or(0),
+            traffic_rx_bytes: self.observed_traffic_rx_bytes.unwrap_or(0),
             last_success_unix_ms: self.last_success_unix_ms,
             last_error: self.last_error.clone(),
         }
@@ -450,6 +461,9 @@ impl<P: StateProtector> ServiceController<P> {
         self.core_pid = Some(pid);
         self.observed_peer_count = None;
         self.observed_peers = None;
+        self.observed_route_count = None;
+        self.observed_traffic_tx_bytes = None;
+        self.observed_traffic_rx_bytes = None;
         self.last_error = None;
         self.supervisor
             .as_mut()
@@ -461,6 +475,9 @@ impl<P: StateProtector> ServiceController<P> {
         self.core_pid = None;
         self.observed_peer_count = None;
         self.observed_peers = None;
+        self.observed_route_count = None;
+        self.observed_traffic_tx_bytes = None;
+        self.observed_traffic_rx_bytes = None;
         self.last_error = Some(detail.into());
         if let Some(supervisor) = &mut self.supervisor {
             supervisor.on_core_exited(now_ms);
@@ -471,6 +488,9 @@ impl<P: StateProtector> ServiceController<P> {
         self.core_pid = None;
         self.observed_peer_count = None;
         self.observed_peers = None;
+        self.observed_route_count = None;
+        self.observed_traffic_tx_bytes = None;
+        self.observed_traffic_rx_bytes = None;
     }
 
     pub fn on_health_sample(&mut self, sample: HealthSample, now_ms: u64) -> SupervisorAction {
@@ -479,6 +499,15 @@ impl<P: StateProtector> ServiceController<P> {
         }
         self.observed_peer_count = sample.connected_peer_count;
         self.observed_peers = sample.connected_peers.clone();
+        if let Some(route_count) = sample.route_count {
+            self.observed_route_count = Some(route_count);
+        }
+        if let Some(traffic_tx_bytes) = sample.traffic_tx_bytes {
+            self.observed_traffic_tx_bytes = Some(traffic_tx_bytes);
+        }
+        if let Some(traffic_rx_bytes) = sample.traffic_rx_bytes {
+            self.observed_traffic_rx_bytes = Some(traffic_rx_bytes);
+        }
         self.supervisor
             .as_mut()
             .map(|supervisor| supervisor.on_health_sample(sample, now_ms))
@@ -494,6 +523,22 @@ impl<P: StateProtector> ServiceController<P> {
             .active_profile_id
             .as_deref()
             .and_then(|profile_id| self.state.profiles.get(profile_id))
+    }
+
+    fn bandwidth_bind_target(&self) -> Option<BandwidthBindTarget> {
+        if self.core_pid.is_none() {
+            return None;
+        }
+        let AddressMode::Static { cidr } = &self.active_profile()?.address_mode else {
+            return None;
+        };
+        let allowed_peers = self
+            .observed_peers
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|peer| peer.ipv4.split('/').next()?.parse().ok());
+        BandwidthBindTarget::from_cidr(cidr).map(|target| target.with_allowed_peers(allowed_peers))
     }
 
     fn prepare_core_launch(&self, expected_profile_id: &str) -> Result<CoreLaunch, ServiceError> {
@@ -577,6 +622,15 @@ impl<P: StateProtector> ServiceController<P> {
             profile,
             make_active,
         })
+    }
+
+    fn export_profile_toml(&self, profile_id: &str) -> Result<String, ServiceError> {
+        self.state
+            .profiles
+            .get(profile_id)
+            .ok_or_else(|| ServiceError::ProfileNotFound(profile_id.to_owned()))?
+            .render_core_toml()
+            .map_err(ServiceError::Profile)
     }
 
     fn delete_profile(&mut self, profile_id: &str) -> Result<(), ServiceError> {
@@ -693,8 +747,8 @@ impl<P: StateProtector> ServiceController<P> {
     }
 
     fn tail_logs(&self, requested_limit: usize) -> Result<Vec<ServiceLogLine>, ServiceError> {
-        const MAX_LOG_LINES: usize = 500;
-        let limit = requested_limit.clamp(1, MAX_LOG_LINES);
+        const MAX_LOG_RECORDS: usize = 500;
+        let limit = requested_limit.clamp(1, MAX_LOG_RECORDS);
         let directory = self.store.paths().logs_dir();
         if !directory.exists() {
             return Ok(Vec::new());
@@ -720,7 +774,7 @@ impl<P: StateProtector> ServiceController<P> {
             .values()
             .map(|profile| profile.network_secret.expose())
             .collect::<Vec<_>>();
-        let mut lines = Vec::with_capacity(limit);
+        let mut records = Vec::with_capacity(limit);
         for (_, path) in files {
             let source = path
                 .file_name()
@@ -728,26 +782,20 @@ impl<P: StateProtector> ServiceController<P> {
                 .unwrap_or("easytier-core.log")
                 .to_owned();
             let content = std::fs::read_to_string(path)?;
-            for line in content.lines().rev() {
-                if line.contains("--network-secret") || line.contains("network_secret") {
+            for record in parse_core_log_records(&content).into_iter().rev() {
+                let Some(record) = sanitize_core_log_record(&record, &secrets) else {
                     continue;
-                }
-                let mut line = line.to_owned();
-                for secret in &secrets {
-                    if !secret.is_empty() {
-                        line = line.replace(secret, "[redacted]");
-                    }
-                }
-                lines.push(ServiceLogLine {
+                };
+                records.push(ServiceLogLine {
                     source: source.clone(),
-                    line,
+                    line: record,
                 });
-                if lines.len() == limit {
-                    return Ok(lines);
+                if records.len() == limit {
+                    return Ok(records);
                 }
             }
         }
-        Ok(lines)
+        Ok(records)
     }
 
     fn clear_logs(&self) -> Result<(), ServiceError> {
@@ -763,6 +811,74 @@ impl<P: StateProtector> ServiceController<P> {
         }
         Ok(())
     }
+}
+
+fn parse_core_log_records(content: &str) -> Vec<String> {
+    let has_structured_records = content.lines().any(is_core_log_record_start);
+    if !has_structured_records {
+        return content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+
+    let mut records = Vec::new();
+    let mut current = None::<String>;
+    for line in content.lines() {
+        if is_core_log_record_start(line) {
+            if let Some(record) = current.take() {
+                records.push(record.trim_end().to_owned());
+            }
+            current = Some(line.to_owned());
+        } else if let Some(record) = current.as_mut() {
+            record.push('\n');
+            record.push_str(line);
+        } else if !line.trim().is_empty() {
+            // Preserve an incomplete leading fragment from a rotated log file.
+            records.push(line.to_owned());
+        }
+    }
+    if let Some(record) = current {
+        records.push(record.trim_end().to_owned());
+    }
+    records
+}
+
+fn is_core_log_record_start(line: &str) -> bool {
+    let line = line.strip_prefix('\u{feff}').unwrap_or(line);
+    let line = line.strip_prefix('[').unwrap_or(line);
+    let bytes = line.as_bytes();
+    if bytes.len() < 19 {
+        return false;
+    }
+
+    let digit = |index: usize| bytes[index].is_ascii_digit();
+    (0..4).all(digit)
+        && bytes[4] == b'-'
+        && (5..7).all(digit)
+        && bytes[7] == b'-'
+        && (8..10).all(digit)
+        && matches!(bytes[10], b'T' | b' ')
+        && (11..13).all(digit)
+        && bytes[13] == b':'
+        && (14..16).all(digit)
+        && bytes[16] == b':'
+        && (17..19).all(digit)
+}
+
+fn sanitize_core_log_record(record: &str, secrets: &[&str]) -> Option<String> {
+    let mut sanitized = record
+        .lines()
+        .filter(|line| !line.contains("--network-secret") && !line.contains("network_secret"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for secret in secrets {
+        if !secret.is_empty() {
+            sanitized = sanitized.replace(secret, "[redacted]");
+        }
+    }
+    (!sanitized.trim().is_empty()).then_some(sanitized)
 }
 
 impl<P: StateProtector> RpcHandler for ServiceController<P> {
@@ -792,6 +908,9 @@ impl<P: StateProtector> RpcHandler for ServiceController<P> {
             RpcCommand::ImportProfile { toml, make_active } => self
                 .import_profile(toml, make_active)
                 .map(RpcResult::ProfileSaved),
+            RpcCommand::ExportProfile { profile_id } => self
+                .export_profile_toml(&profile_id)
+                .map(|toml| RpcResult::ProfileToml { profile_id, toml }),
             RpcCommand::DeleteProfile { profile_id } => self
                 .delete_profile(&profile_id)
                 .map(|()| RpcResult::ProfileDeleted { profile_id }),
@@ -1211,15 +1330,33 @@ impl CoreRunner {
 
     fn health_sample(&mut self) -> Result<HealthSample, ServiceError> {
         let running = self.poll_child_exit()?.is_none() && self.child.is_some();
-        let cli_output = running
-            .then(|| self.cli_executable())
-            .flatten()
-            .and_then(|executable| run_peer_list_cli(&executable).ok().flatten());
+        let (peer_output, route_output, stats_output) = match (running, self.cli_executable()) {
+            (true, Some(executable)) => {
+                // The three read-only CLI calls are independent. Run them in
+                // parallel so one telemetry timeout does not triple the time
+                // the service controller is occupied by a health probe.
+                let route_executable = executable.clone();
+                let route_task =
+                    thread::spawn(move || run_route_list_cli(&route_executable).ok().flatten());
+                let stats_executable = executable.clone();
+                let stats_task =
+                    thread::spawn(move || run_stats_cli(&stats_executable).ok().flatten());
+                let peer_output = run_peer_list_cli(&executable).ok().flatten();
+                (
+                    peer_output,
+                    route_task.join().ok().flatten(),
+                    stats_task.join().ok().flatten(),
+                )
+            }
+            _ => (None, None, None),
+        };
         // A TCP connect alone can succeed while a hung core never processes a
         // management request. A bounded sidecar CLI response is therefore the
         // authoritative control-plane proof; parsing peer rows is telemetry.
-        let control_plane_healthy = running && core_rpc_reachable() && cli_output.is_some();
-        let peer_snapshot = cli_output.as_deref().and_then(peers_from_cli_json);
+        let control_plane_healthy = running && core_rpc_reachable() && peer_output.is_some();
+        let peer_snapshot = peer_output.as_deref().and_then(peers_from_cli_json);
+        let route_count = route_output.as_deref().and_then(route_count_from_cli_json);
+        let traffic = stats_output.as_deref().and_then(traffic_from_cli_json);
         // `peer list` includes the local node with cost=Local. The service
         // status and recovery policy must count only remote peers so that a
         // lonely core remains eligible for the conservative no-peer restart.
@@ -1238,6 +1375,9 @@ impl CoreRunner {
             private_network_reachable: None,
             connected_peer_count,
             connected_peers,
+            route_count,
+            traffic_tx_bytes: traffic.map(|traffic| traffic.tx_bytes),
+            traffic_rx_bytes: traffic.map(|traffic| traffic.rx_bytes),
         })
     }
 
@@ -1450,9 +1590,22 @@ const MAX_PROTOCOL_PARTS_PER_VALUE: usize = MAX_PROTOCOLS_PER_PEER * 4;
 /// separate thread so a large response cannot deadlock the child on a pipe
 /// buffer before the timeout is evaluated.
 fn run_peer_list_cli(executable: &std::path::Path) -> io::Result<Option<String>> {
+    run_cli_json(executable, &["peer", "list"])
+}
+
+fn run_route_list_cli(executable: &std::path::Path) -> io::Result<Option<String>> {
+    run_cli_json(executable, &["route", "list"])
+}
+
+fn run_stats_cli(executable: &std::path::Path) -> io::Result<Option<String>> {
+    run_cli_json(executable, &["stats", "show"])
+}
+
+fn run_cli_json(executable: &std::path::Path, subcommand: &[&str]) -> io::Result<Option<String>> {
     let mut command = Command::new(executable);
     command
-        .args(["-p", CORE_RPC_PORTAL, "-o", "json", "peer", "list"])
+        .args(["-p", CORE_RPC_PORTAL, "-o", "json"])
+        .args(subcommand)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -1496,7 +1649,7 @@ fn run_peer_list_cli(executable: &std::path::Path) -> io::Result<Option<String>>
     };
     let bytes = reader
         .join()
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "peer CLI stdout reader panicked"))??;
+        .map_err(|_| io::Error::other("EasyTier CLI stdout reader panicked"))??;
     if !status.success() || bytes.len() as u64 > MAX_CLI_OUTPUT_BYTES {
         return Ok(None);
     }
@@ -1526,6 +1679,74 @@ fn peer_count_from_cli_value(value: &serde_json::Value) -> Option<usize> {
         .find_map(|key| object.get(*key).and_then(peer_count_from_cli_value)),
         _ => None,
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CoreTraffic {
+    tx_bytes: u64,
+    rx_bytes: u64,
+}
+
+fn route_count_from_cli_json(output: &str) -> Option<usize> {
+    let value = serde_json::from_str::<serde_json::Value>(output).ok()?;
+    route_entries_from_cli_value(&value).map(Vec::len)
+}
+
+fn route_entries_from_cli_value(value: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    match value {
+        serde_json::Value::Array(entries) => Some(entries),
+        serde_json::Value::Object(object) => ["routes", "route_list", "items", "data", "result"]
+            .iter()
+            .find_map(|key| object.get(*key).and_then(route_entries_from_cli_value)),
+        _ => None,
+    }
+}
+
+fn traffic_from_cli_json(output: &str) -> Option<CoreTraffic> {
+    let value = serde_json::from_str::<serde_json::Value>(output).ok()?;
+    let entries = stats_entries_from_cli_value(&value)?;
+    let mut self_tx = None;
+    let mut self_rx = None;
+    let mut data_tx = None;
+    let mut data_rx = None;
+
+    for entry in entries {
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
+        let Some(name) = cli_string(object, &["name"]) else {
+            continue;
+        };
+        let Some(value) = cli_number(object, &["value"]) else {
+            continue;
+        };
+        match name.as_str() {
+            "traffic_bytes_self_tx" => saturating_option_add(&mut self_tx, value),
+            "traffic_bytes_self_rx" => saturating_option_add(&mut self_rx, value),
+            "traffic_bytes_tx" => saturating_option_add(&mut data_tx, value),
+            "traffic_bytes_rx" => saturating_option_add(&mut data_rx, value),
+            _ => {}
+        }
+    }
+
+    Some(CoreTraffic {
+        tx_bytes: self_tx.or(data_tx)?,
+        rx_bytes: self_rx.or(data_rx)?,
+    })
+}
+
+fn stats_entries_from_cli_value(value: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    match value {
+        serde_json::Value::Array(entries) => Some(entries),
+        serde_json::Value::Object(object) => ["stats", "metrics", "items", "data", "result"]
+            .iter()
+            .find_map(|key| object.get(*key).and_then(stats_entries_from_cli_value)),
+        _ => None,
+    }
+}
+
+fn saturating_option_add(total: &mut Option<u64>, value: u64) {
+    *total = Some(total.unwrap_or_default().saturating_add(value));
 }
 
 fn peers_from_cli_json(output: &str) -> Option<Vec<ConnectedPeer>> {
@@ -1582,8 +1803,8 @@ fn connected_peer_from_cli_value(value: &serde_json::Value) -> Option<ConnectedP
         cost: cli_string(object, &["cost"]),
         latency_ms: cli_number(object, &["lat_ms", "latency_ms"])
             .and_then(|value| u32::try_from(value).ok()),
-        rx_bytes: cli_number(object, &["rx_bytes", "received", "received_bytes"]),
-        tx_bytes: cli_number(object, &["tx_bytes", "sent", "sent_bytes"]),
+        rx_bytes: cli_bytes(object, &["rx_bytes", "received", "received_bytes"]),
+        tx_bytes: cli_bytes(object, &["tx_bytes", "sent", "sent_bytes"]),
         tunnel_protocol: protocol_csv(&protocols),
         protocols,
         nat_type: cli_string(object, &["nat_type"]),
@@ -1745,6 +1966,39 @@ fn cli_number(object: &serde_json::Map<String, serde_json::Value>, keys: &[&str]
     })
 }
 
+fn cli_bytes(object: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        object.get(*key).and_then(|value| match value {
+            serde_json::Value::Number(value) => value.as_u64(),
+            serde_json::Value::String(value) if value != "-" => parse_human_bytes(value),
+            _ => None,
+        })
+    })
+}
+
+fn parse_human_bytes(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let unit_start = value
+        .char_indices()
+        .find_map(|(index, character)| {
+            (!character.is_ascii_digit() && character != '.' && character != ',').then_some(index)
+        })
+        .unwrap_or(value.len());
+    let number = value[..unit_start].replace(',', "").parse::<f64>().ok()?;
+    if !number.is_finite() || number < 0.0 {
+        return None;
+    }
+    let multiplier = match value[unit_start..].trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1_f64,
+        "kb" | "kib" => 1_024_f64,
+        "mb" | "mib" => 1_024_f64.powi(2),
+        "gb" | "gib" => 1_024_f64.powi(3),
+        "tb" | "tib" => 1_024_f64.powi(4),
+        _ => return None,
+    };
+    Some((number * multiplier).round().min(u64::MAX as f64) as u64)
+}
+
 fn is_local_peer(peer: &ConnectedPeer) -> bool {
     peer.cost
         .as_deref()
@@ -1789,6 +2043,24 @@ pub fn run_until_stopped(options: ServiceOptions, stop: &AtomicBool) -> Result<(
                 ) {
                     if let Ok(mut controller) = ipc_controller.lock() {
                         controller.record_error(format!("named-pipe server stopped: {error}"));
+                    }
+                }
+            })
+            .map_err(ServiceError::CoreProcess)?;
+        let bandwidth_target = Arc::new(Mutex::new(None));
+        let bandwidth_target_for_thread = Arc::clone(&bandwidth_target);
+        let bandwidth_stop = Arc::new(AtomicBool::new(false));
+        let bandwidth_stop_for_thread = Arc::clone(&bandwidth_stop);
+        let bandwidth_controller = Arc::clone(&controller);
+        let _bandwidth_thread = thread::Builder::new()
+            .name("vibe-easytier-bandwidth".to_owned())
+            .spawn(move || {
+                if let Err(error) = crate::bandwidth::serve_until(
+                    &bandwidth_stop_for_thread,
+                    &bandwidth_target_for_thread,
+                ) {
+                    if let Ok(mut controller) = bandwidth_controller.lock() {
+                        controller.record_error(format!("bandwidth test server stopped: {error}"));
                     }
                 }
             })
@@ -1867,6 +2139,15 @@ pub fn run_until_stopped(options: ServiceOptions, stop: &AtomicBool) -> Result<(
                     now_ms,
                 );
             }
+            {
+                let desired_target = controller
+                    .lock()
+                    .map_err(|_| ServiceError::Synchronization)?
+                    .bandwidth_bind_target();
+                *bandwidth_target
+                    .lock()
+                    .map_err(|_| ServiceError::Synchronization)? = desired_target;
+            }
             thread::sleep(options.poll_interval);
         }
 
@@ -1875,6 +2156,10 @@ pub fn run_until_stopped(options: ServiceOptions, stop: &AtomicBool) -> Result<(
             .lock()
             .map_err(|_| ServiceError::Synchronization)?
             .on_core_stopped();
+        *bandwidth_target
+            .lock()
+            .map_err(|_| ServiceError::Synchronization)? = None;
+        bandwidth_stop.store(true, Ordering::Release);
         ipc_stop.store(true, Ordering::Release);
         Ok(())
     }
@@ -2271,6 +2556,9 @@ mod tests {
             private_network_reachable: None,
             connected_peer_count: Some(peer_count),
             connected_peers: Some(connected_peers),
+            route_count: Some(peer_count.saturating_add(1)),
+            traffic_tx_bytes: Some(1_024),
+            traffic_rx_bytes: Some(2_048),
         }
     }
 
@@ -2281,6 +2569,9 @@ mod tests {
             private_network_reachable: None,
             connected_peer_count: None,
             connected_peers: None,
+            route_count: None,
+            traffic_tx_bytes: None,
+            traffic_rx_bytes: None,
         }
     }
 
@@ -2557,6 +2848,43 @@ mod tests {
         let logs = controller.tail_logs(10).unwrap();
         assert!(logs.iter().all(|line| !line.line.contains("test-secret")));
         assert!(logs.iter().any(|line| line.line == "ordinary line"));
+    }
+
+    #[test]
+    fn log_tail_groups_multiline_core_events_into_single_records() {
+        let controller = controller("log-tail-multiline");
+        let log_dir = controller.store.paths().logs_dir();
+        fs::create_dir_all(&log_dir).unwrap();
+        fs::write(
+            log_dir.join("easytier-core.log"),
+            concat!(
+                "2026-08-01T15:29:22.000Z  INFO easytier::launcher: Core started\n",
+                "2026-08-01T15:29:23.000Z  INFO easytier::connector: lookup failed: Error {\n",
+                "    context: \"hickory dns lookup_ip failed\",\n",
+                "    source: ResolveError {\n",
+                "        kind: Proto(\n",
+                "            ProtoError {\n",
+                "                response_code: NXDomain,\n",
+                "            },\n",
+                "        ),\n",
+                "    },\n",
+                "}\n",
+                "2026-08-01T15:29:24.000Z  WARN easytier::connector: retry scheduled\n",
+            ),
+        )
+        .unwrap();
+
+        let logs = controller.tail_logs(10).unwrap();
+        assert_eq!(logs.len(), 3);
+        assert!(logs[0].line.contains("retry scheduled"));
+        assert!(logs[1].line.contains("lookup failed: Error {"));
+        assert!(logs[1].line.contains("response_code: NXDomain"));
+        assert_eq!(logs[1].line.lines().count(), 10);
+        assert!(logs[2].line.contains("Core started"));
+
+        let latest = controller.tail_logs(1).unwrap();
+        assert_eq!(latest.len(), 1);
+        assert!(latest[0].line.contains("retry scheduled"));
     }
 
     #[test]
@@ -2944,6 +3272,61 @@ accept_dns = false
     }
 
     #[test]
+    fn profile_export_returns_a_complete_core_toml_without_mutating_state() {
+        let mut controller = controller("toml-export");
+        let saved = controller.handle_rpc(RpcRequest::new(
+            1,
+            RpcCommand::UpsertProfile(ProfileUpsert {
+                profile: profile("home"),
+                make_active: true,
+            }),
+        ));
+        assert!(saved.error.is_none());
+
+        let before = controller.persisted_state().clone();
+        let exported = controller.handle_rpc(RpcRequest::new(
+            2,
+            RpcCommand::ExportProfile {
+                profile_id: "home".to_owned(),
+            },
+        ));
+        let toml = match exported.result {
+            Some(RpcResult::ProfileToml { profile_id, toml }) => {
+                assert_eq!(profile_id, "home");
+                toml
+            }
+            other => panic!("expected exported profile TOML, got {other:?}"),
+        };
+
+        let parsed = toml.parse::<toml::Value>().unwrap();
+        assert_eq!(
+            parsed["network_identity"]["network_name"].as_str(),
+            Some("private-network")
+        );
+        assert_eq!(
+            parsed["network_identity"]["network_secret"].as_str(),
+            Some("test-secret")
+        );
+        assert_eq!(controller.persisted_state(), &before);
+    }
+
+    #[test]
+    fn exporting_an_unknown_profile_is_a_not_found_error() {
+        let mut controller = controller("toml-export-missing");
+        let response = controller.handle_rpc(RpcRequest::new(
+            1,
+            RpcCommand::ExportProfile {
+                profile_id: "missing".to_owned(),
+            },
+        ));
+
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code),
+            Some(RpcErrorCode::NotFound)
+        );
+    }
+
+    #[test]
     fn status_marks_unknown_peers_separately_from_zero_peers() {
         let mut controller = controller("peer-status");
         controller.handle_rpc(RpcRequest::new(
@@ -2975,6 +3358,9 @@ accept_dns = false
                 private_network_reachable: None,
                 connected_peer_count: Some(0),
                 connected_peers: Some(Vec::new()),
+                route_count: Some(1),
+                traffic_tx_bytes: Some(10),
+                traffic_rx_bytes: Some(20),
             },
             3,
         );
@@ -2991,12 +3377,18 @@ accept_dns = false
                 private_network_reachable: None,
                 connected_peer_count: None,
                 connected_peers: None,
+                route_count: None,
+                traffic_tx_bytes: None,
+                traffic_rx_bytes: None,
             },
             4,
         );
         let status = controller.status();
         assert_eq!(status.peer_count, 0);
         assert!(!status.peer_count_available);
+        assert_eq!(status.route_count, 1);
+        assert_eq!(status.traffic_tx_bytes, 10);
+        assert_eq!(status.traffic_rx_bytes, 20);
         assert_eq!(status.last_success_unix_ms, Some(4));
         assert_eq!(status.state, ServiceConnectionState::Connecting);
 
@@ -3020,10 +3412,17 @@ accept_dns = false
                     nat_type: None,
                     version: None,
                 }]),
+                route_count: Some(2),
+                traffic_tx_bytes: Some(30),
+                traffic_rx_bytes: Some(40),
             },
             5,
         );
-        assert_eq!(controller.status().state, ServiceConnectionState::Connected);
+        let status = controller.status();
+        assert_eq!(status.state, ServiceConnectionState::Connected);
+        assert_eq!(status.route_count, 2);
+        assert_eq!(status.traffic_tx_bytes, 30);
+        assert_eq!(status.traffic_rx_bytes, 40);
     }
 
     #[test]
@@ -3067,6 +3466,61 @@ accept_dns = false
         assert_eq!(peers[0].tx_bytes, Some(456));
         assert_eq!(peers[0].protocols, vec!["tcp"]);
         assert_eq!(peers[0].tunnel_protocol.as_deref(), Some("tcp"));
+    }
+
+    #[test]
+    fn cli_peer_json_parser_accepts_human_readable_traffic_units() {
+        let peers = peers_from_cli_json(
+            r#"[{"id":"remote","hostname":"remote","ipv4":"10.44.0.3","rx_bytes":"122.65 MB","tx_bytes":"9.89 MB"}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(peers[0].rx_bytes, Some(128_607_846));
+        assert_eq!(peers[0].tx_bytes, Some(10_370_417));
+        assert_eq!(parse_human_bytes("1.5 GiB"), Some(1_610_612_736));
+        assert_eq!(parse_human_bytes("-"), None);
+    }
+
+    #[test]
+    fn cli_route_and_stats_parsers_use_live_core_metrics() {
+        assert_eq!(
+            route_count_from_cli_json(r#"[{"ipv4":"local"},{"ipv4":"remote"}]"#),
+            Some(2)
+        );
+        assert_eq!(
+            route_count_from_cli_json(r#"{"data":{"routes":[{}, {}, {}]}}"#),
+            Some(3)
+        );
+        assert_eq!(route_count_from_cli_json(r#"{"unknown":[]}"#), None);
+
+        let traffic = traffic_from_cli_json(
+            r#"[
+              {"name":"traffic_bytes_tx","value":999},
+              {"name":"traffic_bytes_rx","value":"888"},
+              {"name":"traffic_bytes_self_tx","value":10802127},
+              {"name":"traffic_bytes_self_rx","value":122278646}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            traffic,
+            CoreTraffic {
+                tx_bytes: 10_802_127,
+                rx_bytes: 122_278_646,
+            }
+        );
+
+        let fallback = traffic_from_cli_json(
+            r#"{"stats":[{"name":"traffic_bytes_tx","value":42},{"name":"traffic_bytes_rx","value":84}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            fallback,
+            CoreTraffic {
+                tx_bytes: 42,
+                rx_bytes: 84
+            }
+        );
     }
 
     #[test]

@@ -11,8 +11,10 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  FileDown,
   FileUp,
   FileText,
+  Gauge,
   Globe2,
   LayoutDashboard,
   Link2,
@@ -42,6 +44,7 @@ import {
   canConnect,
   canDisconnect,
   connectionMeta,
+  formatBitsPerSecond,
   formatBytes,
   formatDuration,
 } from './lib/connection'
@@ -65,6 +68,7 @@ import {
   validateBootstrapPeer,
 } from './lib/profile'
 import type {
+  BandwidthTestResult,
   ConnectionPhase,
   EasyTierFlags,
   LogEntry,
@@ -78,7 +82,6 @@ type PageId = 'overview' | 'network' | 'peers' | 'logs' | 'settings'
 type DialogState =
   | { mode: 'create' }
   | { mode: 'edit'; profile: NetworkProfile }
-  | { mode: 'import' }
   | null
 
 const navigation: Array<{
@@ -253,7 +256,8 @@ export const App = () => {
             activeProfile={activeProfile}
             phase={desktop.snapshot.runtime.phase}
             onCreate={() => setDialog({ mode: 'create' })}
-            onImport={() => setDialog({ mode: 'import' })}
+            onImport={() => desktop.importProfile()}
+            onExport={(profileId) => desktop.exportProfile(profileId)}
             onEdit={(profile) => setDialog({ mode: 'edit', profile })}
             onDelete={(profileId) => void desktop.deleteProfile(profileId)}
             onSelect={desktop.selectProfile}
@@ -262,7 +266,13 @@ export const App = () => {
           />
         )
       case 'peers':
-        return <PeersPage peers={desktop.snapshot.peers} onOpenNetwork={() => selectPage('network')} />
+        return (
+          <PeersPage
+            peers={desktop.snapshot.peers}
+            onOpenNetwork={() => selectPage('network')}
+            onRunBandwidthTest={desktop.runBandwidthTest}
+          />
+        )
       case 'logs':
         return <LogsPage logs={desktop.snapshot.logs} onClear={() => void desktop.clearLogs()} />
       case 'settings':
@@ -435,21 +445,12 @@ export const App = () => {
         })}
       </nav>
 
-      {dialog && dialog.mode !== 'import' && (
+      {dialog && (
         <ProfileDialog
           profile={dialog.mode === 'edit' ? dialog.profile : null}
           onClose={() => setDialog(null)}
           onSave={async (draft) => {
             await desktop.saveProfile(draft, dialog.mode === 'edit' ? dialog.profile.id : undefined)
-            setDialog(null)
-          }}
-        />
-      )}
-      {dialog?.mode === 'import' && (
-        <ImportProfileDialog
-          onClose={() => setDialog(null)}
-          onImport={async (toml) => {
-            await desktop.importProfile(toml)
             setDialog(null)
           }}
         />
@@ -782,6 +783,7 @@ const PrivateNetworkPage = ({
   phase,
   onCreate,
   onImport,
+  onExport,
   onEdit,
   onDelete,
   onSelect,
@@ -792,7 +794,8 @@ const PrivateNetworkPage = ({
   activeProfile: NetworkProfile | null
   phase: ConnectionPhase
   onCreate: () => void
-  onImport: () => void
+  onImport: () => Promise<NetworkProfile | null>
+  onExport: (profileId: string) => Promise<string | null>
   onEdit: (profile: NetworkProfile) => void
   onDelete: (id: string) => void
   onSelect: (id: string) => void
@@ -800,6 +803,9 @@ const PrivateNetworkPage = ({
   onDisconnect: () => void
 }) => {
   const [copied, setCopied] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  const importErrorRef = useErrorFocus(importError)
 
   const copyAddress = async () => {
     if (!activeProfile?.virtualIp) return
@@ -812,17 +818,50 @@ const PrivateNetworkPage = ({
     }
   }
 
+  const importLocalToml = async () => {
+    if (importing) return
+    setImporting(true)
+    setImportError('')
+    try {
+      await onImport()
+    } catch (error) {
+      setImportError(getErrorMessage(error, '无法从本地文件导入 TOML。'))
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="私有网络"
         actions={
           <>
-            <button className="button button--secondary" type="button" onClick={onImport}><FileUp size={17} /> 导入 TOML</button>
+            <button
+              className="button button--secondary"
+              type="button"
+              title="选择本地 .toml 文件并导入"
+              onClick={() => void importLocalToml()}
+              disabled={importing}
+            >
+              <FileUp size={17} /> {importing ? '正在导入' : '导入本地 TOML'}
+            </button>
+            <button
+              className="button button--secondary"
+              type="button"
+              title="导出完整 TOML，文件中包含网络密钥"
+              onClick={() => {
+                if (activeProfile) void onExport(activeProfile.id).catch(() => undefined)
+              }}
+              disabled={!activeProfile}
+            >
+              <FileDown size={17} /> 导出 TOML
+            </button>
             <button className="button button--primary" type="button" onClick={onCreate}><Plus size={17} /> 新建档案</button>
           </>
         }
       />
+      {importError && <p className="form-error" ref={importErrorRef} tabIndex={-1} role="alert">导入档案失败：{importError}</p>}
       <section className="network-workspace">
         <div className="profile-rail" aria-label="私有网络档案">
           {profiles.map((profile) => {
@@ -905,11 +944,47 @@ const PeerProtocolList = ({ protocols }: { protocols?: readonly string[] }) => {
 export const PeersPage = ({
   peers,
   onOpenNetwork,
+  onRunBandwidthTest,
 }: {
   peers: ReturnType<typeof useDesktopState>['snapshot']['peers']
   onOpenNetwork: () => void
+  onRunBandwidthTest: (peerId: string) => Promise<BandwidthTestResult>
 }) => {
+  const [bandwidthTests, setBandwidthTests] = useState<Record<string, {
+    status: 'running' | 'success' | 'error'
+    result?: BandwidthTestResult
+    error?: string
+  }>>({})
+  const runningTestRef = useRef(false)
   const online = peers.filter((peer) => peer.state !== 'offline').length
+  const testRunning = Object.values(bandwidthTests).some((test) => test.status === 'running')
+
+  const runTest = async (peerId: string) => {
+    if (runningTestRef.current) return
+    runningTestRef.current = true
+    setBandwidthTests((current) => ({
+      ...current,
+      [peerId]: { status: 'running' },
+    }))
+    try {
+      const result = await onRunBandwidthTest(peerId)
+      setBandwidthTests((current) => ({
+        ...current,
+        [peerId]: { status: 'success', result },
+      }))
+    } catch (error) {
+      setBandwidthTests((current) => ({
+        ...current,
+        [peerId]: {
+          status: 'error',
+          error: getErrorMessage(error, '节点间带宽测试失败。'),
+        },
+      }))
+    } finally {
+      runningTestRef.current = false
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -920,21 +995,52 @@ export const PeersPage = ({
         {peers.length ? (
           <table className="peer-table">
             <thead>
-              <tr><th>节点</th><th>地址</th><th>角色</th><th>状态</th><th>连接协议</th><th>延迟</th><th>版本</th><th>最近出现</th></tr>
+              <tr><th>节点</th><th>地址</th><th>角色</th><th>状态</th><th>连接协议</th><th>延迟</th><th>版本</th><th>最近出现</th><th>带宽测试</th></tr>
             </thead>
             <tbody>
-              {peers.map((peer) => (
-                <tr key={peer.id}>
-                  <td data-label="节点"><div className="peer-name"><span className={`peer-avatar peer-avatar--${peer.state}`}><CircleDot size={16} /></span><div><strong>{peer.name}</strong><span>{peer.hostname}</span></div></div></td>
-                  <td data-label="地址"><code>{peer.virtualIp}</code></td>
-                  <td data-label="角色"><span className="role-chip">{peerRoleLabel(peer.role)}</span></td>
-                  <td data-label="状态"><span className={`peer-state peer-state--${peer.state}`}><span />{peerStateLabel(peer.state)}</span></td>
-                  <td data-label="连接协议"><PeerProtocolList protocols={peer.protocols} /></td>
-                  <td data-label="延迟">{peer.state === 'offline' ? '--' : `${peer.latencyMs} ms`}</td>
-                  <td data-label="版本">{peer.version}</td>
-                  <td data-label="最近出现">{formatDateTime(peer.lastSeen)}</td>
-                </tr>
-              ))}
+              {peers.map((peer) => {
+                const test = bandwidthTests[peer.id]
+                return (
+                  <tr key={peer.id}>
+                    <td data-label="节点"><div className="peer-name"><span className={`peer-avatar peer-avatar--${peer.state}`}><CircleDot size={16} /></span><div><strong>{peer.name}</strong><span>{peer.hostname}</span></div></div></td>
+                    <td data-label="地址"><code>{peer.virtualIp}</code></td>
+                    <td data-label="角色"><span className="role-chip">{peerRoleLabel(peer.role)}</span></td>
+                    <td data-label="状态"><span className={`peer-state peer-state--${peer.state}`}><span />{peerStateLabel(peer.state)}</span></td>
+                    <td data-label="连接协议"><PeerProtocolList protocols={peer.protocols} /></td>
+                    <td data-label="延迟">{peer.state === 'offline' ? '--' : `${peer.latencyMs} ms`}</td>
+                    <td data-label="版本">{peer.version}</td>
+                    <td data-label="最近出现">{formatDateTime(peer.lastSeen)}</td>
+                    <td data-label="带宽测试">
+                      {test?.status === 'success' && test.result ? (
+                        <div className="bandwidth-result">
+                          <span><ArrowDown size={13} />{formatBitsPerSecond(test.result.downloadBps)}</span>
+                          <span><ArrowUp size={13} />{formatBitsPerSecond(test.result.uploadBps)}</span>
+                          <IconButton title="重新测试带宽" onClick={() => void runTest(peer.id)} disabled={testRunning}>
+                            <RefreshCw size={14} />
+                          </IconButton>
+                        </div>
+                      ) : test?.status === 'error' ? (
+                        <div className="bandwidth-error">
+                          <span>{test.error}</span>
+                          <IconButton title="重试带宽测试" onClick={() => void runTest(peer.id)} disabled={testRunning}>
+                            <RefreshCw size={14} />
+                          </IconButton>
+                        </div>
+                      ) : (
+                        <button
+                          className="button button--secondary bandwidth-button"
+                          type="button"
+                          onClick={() => void runTest(peer.id)}
+                          disabled={peer.state === 'offline' || testRunning}
+                        >
+                          {test?.status === 'running' ? <RefreshCw className="spin" size={15} /> : <Gauge size={15} />}
+                          {test?.status === 'running' ? '测速中' : '测速'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         ) : (
@@ -1409,64 +1515,6 @@ const ProfileDialog = ({
           <footer className="profile-dialog__footer">
             <button className="button button--quiet" type="button" onClick={onClose} disabled={saving}>取消</button>
             <button className="button button--primary" type="submit" disabled={saving}><Check size={17} /> {saving ? '保存中' : '保存档案'}</button>
-          </footer>
-        </form>
-      </section>
-    </div>
-  )
-}
-
-const ImportProfileDialog = ({
-  onClose,
-  onImport,
-}: {
-  onClose: () => void
-  onImport: (toml: string) => Promise<void>
-}) => {
-  const [toml, setToml] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const errorRef = useErrorFocus(error)
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !saving) onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, saving])
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!toml.trim()) {
-      setError('请粘贴档案 TOML 内容。')
-      return
-    }
-    setSaving(true)
-    setError('')
-    try {
-      await onImport(toml)
-    } catch (importError) {
-      setError(getErrorMessage(importError, '无法导入档案。'))
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="profile-dialog" role="dialog" aria-modal="true" aria-labelledby="import-profile-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="profile-dialog__header">
-          <div><span className="dialog-icon"><FileUp size={20} /></span><h2 id="import-profile-dialog-title">导入档案</h2></div>
-          <IconButton title="关闭对话框" onClick={onClose} disabled={saving}><X size={18} /></IconButton>
-        </header>
-        <form onSubmit={(event) => void submit(event)}>
-          <div className="form-grid">
-            <label className="field field--wide"><span>档案 TOML</span><textarea className="import-toml" value={toml} onChange={(event) => { setToml(event.target.value); setError('') }} autoFocus spellCheck={false} /></label>
-          </div>
-          {error && <p className="form-error" ref={errorRef} tabIndex={-1} role="alert">导入档案失败：{error}</p>}
-          <footer className="profile-dialog__footer">
-            <button className="button button--quiet" type="button" onClick={onClose} disabled={saving}>取消</button>
-            <button className="button button--primary" type="submit" disabled={saving}><FileUp size={17} /> {saving ? '导入中' : '导入档案'}</button>
           </footer>
         </form>
       </section>

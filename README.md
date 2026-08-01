@@ -24,6 +24,15 @@ supervisor for the pinned core process.
 - The service launches the core with `--rpc-portal 127.0.0.1:15888` and a
   loopback whitelist. The desktop UI never calls that port; it uses the
   service-owned named pipe instead.
+- Route and traffic cards are sampled from the pinned `easytier-cli` `route
+  list` and `stats show` commands. Profile export is requested through the
+  protected pipe and written by native Tauri code, so the complete TOML and
+  its network secret never enter webview state.
+- Node bandwidth tests run sequential download and upload probes over the
+  EasyTier virtual IPv4 path. The service listens only on that virtual address
+  and accepts current EasyTier peers. Both nodes need this Vibe service version;
+  the installer owns the TCP 29999 Windows Firewall rule and removes it on
+  uninstall.
 - Network secrets are encrypted in service-owned state with Windows DPAPI.
   The service writes the active secret only to an ACL-protected runtime TOML,
   keeping it out of the core process command line. The desktop UI gets a

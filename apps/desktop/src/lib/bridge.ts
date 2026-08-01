@@ -1,4 +1,5 @@
 import type {
+  BandwidthTestResult,
   DesktopSnapshot,
   EasyTierFlags,
   LogEntry,
@@ -17,7 +18,9 @@ export interface EasyTierCoreBridge {
   getSnapshot?: () => Promise<Partial<DesktopSnapshot>>
   saveProfile?: (profile: NetworkProfile) => Promise<NetworkProfile>
   updateProfileFlags?: (profileId: string, flags: EasyTierFlags) => Promise<NetworkProfile>
-  importProfile?: (toml: string) => Promise<NetworkProfile>
+  importProfileFromFile?: () => Promise<NetworkProfile | null>
+  exportProfile?: (profileId: string) => Promise<string | null>
+  runBandwidthTest?: (peerId: string) => Promise<BandwidthTestResult>
   deleteProfile?: (profileId: string) => Promise<void>
   selectProfile?: (profileId: string) => Promise<void>
   connect?: (profileId: string) => Promise<void>
@@ -61,7 +64,9 @@ export const getCoreBridge = (): EasyTierCoreBridge | undefined => {
     getSnapshot: () => invoke<Partial<DesktopSnapshot>>('get_snapshot'),
     saveProfile: (profile) => invoke<NetworkProfile>('save_profile', { profile }),
     updateProfileFlags: (profileId, flags) => invoke<NetworkProfile>('update_profile_flags', { profileId, flags }),
-    importProfile: (toml) => invoke<NetworkProfile>('import_profile', { toml }),
+    importProfileFromFile: () => invoke<NetworkProfile | null>('import_profile_from_file'),
+    exportProfile: (profileId) => invoke<string | null>('export_profile_toml', { profileId }),
+    runBandwidthTest: (peerId) => invoke<BandwidthTestResult>('run_peer_bandwidth_test', { peerId }),
     deleteProfile: (profileId) => invoke<void>('delete_profile', { profileId }),
     selectProfile: (profileId) => invoke<void>('select_active_profile', { profileId }),
     connect: (profileId) => invoke<void>('connect', { profileId }),

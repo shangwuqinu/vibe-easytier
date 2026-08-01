@@ -52,6 +52,15 @@ pub struct ServiceStatus {
     pub peer_count: usize,
     #[serde(default)]
     pub peer_count_available: bool,
+    /// Live route and traffic telemetry sampled from the bundled CLI. The
+    /// defaults keep an upgraded desktop compatible while the service binary
+    /// is being replaced.
+    #[serde(default)]
+    pub route_count: usize,
+    #[serde(default)]
+    pub traffic_tx_bytes: u64,
+    #[serde(default)]
+    pub traffic_rx_bytes: u64,
     /// Unix milliseconds of the most recent successful local core RPC health
     /// sample. This is control-plane health, not a promise that a remote peer
     /// was connected at that time.
@@ -71,6 +80,9 @@ impl ServiceStatus {
             consecutive_failures: 0,
             peer_count: 0,
             peer_count_available: false,
+            route_count: 0,
+            traffic_tx_bytes: 0,
+            traffic_rx_bytes: 0,
             last_success_unix_ms: None,
             last_error: None,
         }
@@ -195,6 +207,12 @@ pub enum RpcCommand {
         toml: String,
         make_active: bool,
     },
+    /// Returns a complete TOML only to the ACL-protected native client. The
+    /// Tauri host writes it directly to the path selected by the user and
+    /// never serializes the network secret into webview state.
+    ExportProfile {
+        profile_id: String,
+    },
     DeleteProfile {
         profile_id: String,
     },
@@ -241,6 +259,7 @@ pub enum RpcResult {
     Profiles(Vec<ProfileView>),
     Peers(Vec<ConnectedPeer>),
     ProfileSaved(ProfileView),
+    ProfileToml { profile_id: String, toml: String },
     ProfileDeleted { profile_id: String },
     ActiveProfileSelected(ServiceStatus),
     IntentApplied(ServiceStatus),
