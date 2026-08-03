@@ -28,11 +28,13 @@ supervisor for the pinned core process.
   list` and `stats show` commands. Profile export is requested through the
   protected pipe and written by native Tauri code, so the complete TOML and
   its network secret never enter webview state.
-- Node bandwidth tests run sequential download and upload probes over the
-  EasyTier virtual IPv4 path. The service listens only on that virtual address
-  and accepts current EasyTier peers. Both nodes need this Vibe service version;
-  the installer owns the TCP 29999 Windows Firewall rule and removes it on
-  uninstall.
+- Node bandwidth tests use bundled iperf3 3.21 clients and a supervised
+  iperf3 server. Upload and reverse-download tests run sequentially, with both
+  ends bound to their EasyTier virtual IPv4 addresses. Both nodes need this
+  Vibe service version; the installer scopes TCP 29999 to `iperf3.exe` in
+  Windows Firewall and removes the rule on uninstall. Service-owned executable
+  directories allow normal users to read and run binaries but not replace
+  LocalSystem child executables.
 - Network secrets are encrypted in service-owned state with Windows DPAPI.
   The service writes the active secret only to an ACL-protected runtime TOML,
   keeping it out of the core process command line. The desktop UI gets a
@@ -73,6 +75,7 @@ npm --prefix .\apps\desktop ci
 npm --prefix .\apps\desktop run build
 cargo test -p vibe-easytier-service
 pwsh -NoProfile -File .\scripts\Fetch-EasyTierRuntime.ps1 -Architecture x64
+pwsh -NoProfile -File .\scripts\Fetch-Iperf3Runtime.ps1 -Architecture x64
 cargo build --release -p vibe-easytier-service --target x86_64-pc-windows-msvc
 pwsh -NoProfile -File .\scripts\Stage-VibeEasyTierService.ps1 -Architecture x64
 npm --prefix .\apps\desktop run desktop:dev
@@ -85,8 +88,8 @@ service executable has been staged.
 
 ## Packaging
 
-The EasyTier runtime is locked to v2.6.4 in
-`resources/easytier-runtime.manifest.json`. Validate inputs before bundling:
+EasyTier is locked to v2.6.4 and iperf3 is locked to 3.21 in their respective
+runtime manifests under `resources`. Validate both inputs before bundling:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\Test-EasyTierPackaging.ps1 -Architecture x64 -RequireRuntime -RequireServiceBinary -VerifyReleaseMetadata

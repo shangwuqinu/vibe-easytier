@@ -56,7 +56,7 @@ describe('PeersPage', () => {
     )
 
     expect(markup).toContain('连接协议')
-    expect(markup).toContain('带宽测试')
+    expect(markup).toContain('iperf3 测速')
     expect(markup).toContain('测速')
     expect(markup).toContain('TCP')
     expect(markup).toContain('WireGuard')

@@ -51,6 +51,20 @@ if ([string]$manifest.version -ne '2.6.4' -or [string]$manifest.upstream.tag -ne
     throw 'EasyTier runtime manifest is not pinned to v2.6.4.'
 }
 
+$iperfManifestPath = Join-Path $repositoryRoot 'resources\iperf3-runtime.manifest.json'
+Assert-File -Path $iperfManifestPath -Description 'iperf3 runtime manifest'
+$iperfManifest = Get-Content -LiteralPath $iperfManifestPath -Raw | ConvertFrom-Json
+if ([string]$iperfManifest.version -ne '3.21' -or [string]$iperfManifest.upstream.tag -ne '3.21' -or [string]$iperfManifest.binaryDistribution.tag -ne '3.21') {
+    throw 'iperf3 runtime manifest is not pinned to version 3.21.'
+}
+$iperfAsset = $iperfManifest.assets.x64
+if ($null -eq $iperfAsset -or -not ([string]$iperfAsset.sha256 -match '^[0-9a-fA-F]{64}$') -or [int64]$iperfAsset.size -le 0) {
+    throw 'The iperf3 x64 asset metadata is invalid.'
+}
+if ([string]$iperfAsset.url -notmatch '/3\.21/iperf-3\.21-win64\.zip$') {
+    throw 'The iperf3 runtime URL is not pinned to the expected 3.21 x64 asset.'
+}
+
 foreach ($arch in @('x64', 'arm64')) {
     $asset = $manifest.assets.$arch
     if ($null -eq $asset) {
@@ -69,12 +83,14 @@ foreach ($arch in @('x64', 'arm64')) {
 
 $scriptNames = @(
     'Fetch-EasyTierRuntime.ps1',
+    'Fetch-Iperf3Runtime.ps1',
     'Stage-VibeEasyTierService.ps1',
     'Register-EasyTierService.ps1',
     'Unregister-EasyTierService.ps1',
     'Remove-VibeEasyTierState.ps1',
     'Invoke-EasyTierInstallerSmoke.ps1',
     'Test-EasyTierService.ps1',
+    'Test-Iperf3Runtime.ps1',
     'Test-EasyTierPackaging.ps1'
 )
 foreach ($scriptName in $scriptNames) {
@@ -109,6 +125,12 @@ if ([string]$fragment.bundle.resources.$expectedRuntimeResource -ne 'resources/e
 if ([string]$fragment.bundle.resources.$expectedServiceResource -ne 'resources/service') {
     throw 'Tauri NSIS fragment does not map the service host to the service resource directory.'
 }
+if ($Architecture -eq 'x64') {
+    $expectedIperf3Resource = '../resources/iperf3/windows-x64'
+    if ([string]$fragment.bundle.resources.$expectedIperf3Resource -ne 'resources/iperf3') {
+        throw 'Tauri NSIS x64 fragment does not map the bundled iperf3 runtime.'
+    }
+}
 if ([string]$fragment.bundle.resources.'../scripts/Remove-VibeEasyTierState.ps1' -ne 'resources/scripts/Remove-VibeEasyTierState.ps1') {
     throw 'Tauri NSIS fragment does not bundle the state-cleanup script.'
 }
@@ -131,6 +153,9 @@ if ([string]$tauriConfig.bundle.resources.$expectedRuntimeResource -ne 'resource
 if ([string]$tauriConfig.bundle.resources.$expectedServiceResource -ne 'resources/service') {
     throw 'The active Tauri configuration does not map the service host resource.'
 }
+if ($Architecture -eq 'x64' -and [string]$tauriConfig.bundle.resources.'../resources/iperf3/windows-x64' -ne 'resources/iperf3') {
+    throw 'The active Tauri configuration does not map the bundled iperf3 runtime.'
+}
 if ([string]$tauriConfig.bundle.resources.'../scripts/Remove-VibeEasyTierState.ps1' -ne 'resources/scripts/Remove-VibeEasyTierState.ps1') {
     throw 'The active Tauri configuration does not bundle the state-cleanup script.'
 }
@@ -151,6 +176,9 @@ if ($hooks.IndexOf('$COMMONAPPDATA', [StringComparison]::OrdinalIgnoreCase) -ge 
 }
 if ($hooks.IndexOf('Remove-VibeEasyTierState.ps1', [StringComparison]::OrdinalIgnoreCase) -lt 0) {
     throw 'NSIS hooks must clean the Vibe EasyTier ProgramData state during uninstall.'
+}
+if ($hooks.IndexOf('-Iperf3Directory "$INSTDIR\resources\iperf3"', [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+    throw 'NSIS hooks must pass the installed iperf3 runtime to the Windows service registration script.'
 }
 if ($hooks.IndexOf('NSIS_HOOK_PREINSTALL', [StringComparison]::Ordinal) -lt 0 -or $hooks.IndexOf('-KeepRegistration', [StringComparison]::OrdinalIgnoreCase) -lt 0) {
     throw 'NSIS preinstall must stop the old service without deleting its owner-bearing SCM registration.'
@@ -188,6 +216,12 @@ if ($unregisterScript.IndexOf('KeepRegistration', [StringComparison]::Ordinal) -
 }
 if ($registerScript.IndexOf('New-NetFirewallRule', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('29999', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service registration must allow the node-to-node bandwidth test through Windows Firewall.'
+}
+if ($registerScript.IndexOf('--iperf3', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('Set-BandwidthFirewallRule -ProgramPath $iperf3Path', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Service registration must supervise bundled iperf3 and scope its firewall rule to iperf3.exe.'
+}
+if ($registerScript.IndexOf('Protect-ExecutableDirectory', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('S-1-5-32-545', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Service registration must prevent normal users from replacing LocalSystem child executables.'
 }
 if ($registerScript.IndexOf('Node bandwidth tests may be blocked.', [StringComparison]::Ordinal) -lt 0) {
     throw 'A managed firewall policy must not prevent the boot service from being registered and started.'
@@ -269,6 +303,25 @@ else {
     Write-Output "Runtime not staged yet: $runtimeDirectory"
 }
 
+$iperfRuntimeDirectory = Join-Path $repositoryRoot 'resources\iperf3\windows-x64'
+$iperfExecutable = Join-Path $iperfRuntimeDirectory 'iperf3.exe'
+if (Test-Path -LiteralPath $iperfRuntimeDirectory -PathType Container) {
+    foreach ($requiredFile in @($iperfManifest.requiredFiles)) {
+        Assert-File -Path (Join-Path $iperfRuntimeDirectory ([string]$requiredFile)) -Description 'Staged iperf3 runtime file'
+    }
+    $iperfVersion = (& $iperfExecutable --version 2>&1) -join [Environment]::NewLine
+    if ($LASTEXITCODE -ne 0 -or $iperfVersion -notmatch 'iperf\s+3\.21') {
+        throw "Staged iperf3 does not report version 3.21. Output: $iperfVersion"
+    }
+    & (Join-Path $PSScriptRoot 'Test-Iperf3Runtime.ps1') -RuntimeDirectory $iperfRuntimeDirectory
+}
+elseif ($RequireRuntime -and $Architecture -eq 'x64') {
+    throw "Staged iperf3 runtime is required but missing: $iperfRuntimeDirectory"
+}
+else {
+    Write-Output "iperf3 runtime not staged yet: $iperfRuntimeDirectory"
+}
+
 $serviceBinary = Join-Path $repositoryRoot "resources\service\windows-$Architecture\vibe-easytier-service.exe"
 if (-not (Test-Path -LiteralPath $serviceBinary -PathType Leaf)) {
     if ($RequireServiceBinary) {
@@ -279,6 +332,9 @@ if (-not (Test-Path -LiteralPath $serviceBinary -PathType Leaf)) {
 
 if ($VerifyReleaseMetadata) {
     & (Join-Path $PSScriptRoot 'Fetch-EasyTierRuntime.ps1') -Architecture $Architecture -DryRun
+    if ($Architecture -eq 'x64') {
+        & (Join-Path $PSScriptRoot 'Fetch-Iperf3Runtime.ps1') -Architecture x64 -DryRun
+    }
 }
 
 Write-Output "Packaging assets passed static validation for $Architecture."

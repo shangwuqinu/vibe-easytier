@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "runtime": "iperf3 for Windows",
+  "version": "3.21",
+  "upstream": {
+    "repository": "esnet/iperf",
+    "tag": "3.21",
+    "sourceUrl": "https://github.com/esnet/iperf/tree/3.21"
+  },
+  "binaryDistribution": {
+    "repository": "ar51an/iperf3-win-builds",
+    "tag": "3.21",
+    "releaseUrl": "https://github.com/ar51an/iperf3-win-builds/releases/tag/3.21",
+    "cygwinVersion": "3.6.7"
+  },
+  "requiredFiles": [
+    "iperf3.exe",
+    "cygwin1.dll",
+    "THIRD_PARTY_NOTICES.md",
+    "licenses/iperf3-LICENSE.txt",
+    "licenses/LGPL-3.0.txt",
+    "licenses/GPL-3.0.txt",
+    "licenses/CYGWIN-LINKING-EXCEPTION.txt"
+  ],
+  "assets": {
+    "x64": {
+      "assetName": "iperf-3.21-win64.zip",
+      "size": 1184513,
+      "sha256": "9b73b7e0e0326347b5f4ac4f6a1fc34fe60a5966e5fd172c7bfcd0e1cc93e709",
+      "url": "https://github.com/ar51an/iperf3-win-builds/releases/download/3.21/iperf-3.21-win64.zip"
+    }
+  }
+}

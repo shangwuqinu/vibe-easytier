@@ -11,6 +11,9 @@ param(
     [Parameter(Mandatory)]
     [string]$RuntimeDirectory,
 
+    [Parameter(Mandatory)]
+    [string]$Iperf3Directory,
+
     [string]$StateDirectory = (Join-Path $env:ProgramData 'VibeEasyTier'),
 
     [string]$OwnerSid,
@@ -135,6 +138,36 @@ function Protect-StateDirectory {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Protect-ExecutableDirectory {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if ($DryRun) {
+        Write-Output "DRY-RUN: restrict executable directory $Path to administrator writes and user read/execute"
+        return
+    }
+
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $propagation = [System.Security.AccessControl.PropagationFlags]::None
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+    $full = [System.Security.AccessControl.FileSystemRights]::FullControl
+    $readExecute = [System.Security.AccessControl.FileSystemRights]::ReadAndExecute
+
+    foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+        $sid = [System.Security.Principal.SecurityIdentifier]::new($sidText)
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inheritance, $propagation, $allow)
+        [void]$acl.AddAccessRule($rule)
+    }
+    $usersSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+    $usersRule = [System.Security.AccessControl.FileSystemAccessRule]::new($usersSid, $readExecute, $inheritance, $propagation, $allow)
+    [void]$acl.AddAccessRule($usersRule)
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
 function Set-BandwidthFirewallRule {
     param(
         [Parameter(Mandatory)]
@@ -150,8 +183,8 @@ function Set-BandwidthFirewallRule {
         Remove-NetFirewallRule -Name $BandwidthFirewallRuleName -ErrorAction SilentlyContinue
         New-NetFirewallRule `
             -Name $BandwidthFirewallRuleName `
-            -DisplayName "$DisplayName - Bandwidth Test" `
-            -Description 'Allows authenticated EasyTier peers to run the Vibe EasyTier bandwidth test.' `
+            -DisplayName "$DisplayName - iperf3 Bandwidth Test" `
+            -Description 'Allows private EasyTier peers to reach the bundled iperf3 bandwidth-test server.' `
             -Direction Inbound `
             -Action Allow `
             -Enabled True `
@@ -394,6 +427,7 @@ function Set-ServiceRegistration {
 
 $ServiceBinaryPath = [System.IO.Path]::GetFullPath($ServiceBinaryPath)
 $RuntimeDirectory = [System.IO.Path]::GetFullPath($RuntimeDirectory)
+$Iperf3Directory = [System.IO.Path]::GetFullPath($Iperf3Directory)
 $StateDirectory = [System.IO.Path]::GetFullPath($StateDirectory)
 $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 $existingServiceOwnedByThisInstall = $false
@@ -419,8 +453,9 @@ if ($null -ne $existingService) {
 
 $OwnerSid = Resolve-InteractiveOwnerSid -RequestedSid $OwnerSid
 $corePath = Join-Path $RuntimeDirectory 'easytier-core.exe'
+$iperf3Path = Join-Path $Iperf3Directory 'iperf3.exe'
 $quote = [string][char]34
-$serviceCommand = "$quote$ServiceBinaryPath$quote --service --state-root $quote$StateDirectory$quote --core $quote$corePath$quote --owner-sid $quote$OwnerSid$quote"
+$serviceCommand = "$quote$ServiceBinaryPath$quote --service --state-root $quote$StateDirectory$quote --core $quote$corePath$quote --iperf3 $quote$iperf3Path$quote --owner-sid $quote$OwnerSid$quote"
 
 if ([string]::IsNullOrWhiteSpace($OwnerSid) -or $OwnerSid -notmatch '^S-1-') {
     throw 'OwnerSid must be a Windows security identifier.'
@@ -431,6 +466,11 @@ if (-not $DryRun) {
     Assert-ExistingFile -Path $ServiceBinaryPath -Description 'Vibe EasyTier service binary'
     Assert-ExistingDirectory -Path $RuntimeDirectory -Description 'EasyTier runtime directory'
     Assert-ExistingFile -Path $corePath -Description 'EasyTier core binary'
+    Assert-ExistingDirectory -Path $Iperf3Directory -Description 'iperf3 runtime directory'
+    Assert-ExistingFile -Path $iperf3Path -Description 'iperf3 executable'
+    Protect-ExecutableDirectory -Path (Split-Path -Parent $ServiceBinaryPath)
+    Protect-ExecutableDirectory -Path $RuntimeDirectory
+    Protect-ExecutableDirectory -Path $Iperf3Directory
     Protect-StateDirectory -Path $StateDirectory
 }
 
@@ -459,7 +499,7 @@ Invoke-Sc -Arguments @(
     'restart/5000/restart/15000/restart/60000'
 )
 Invoke-Sc -Arguments @('failureflag', $ServiceName, '1')
-Set-BandwidthFirewallRule -ProgramPath $ServiceBinaryPath
+Set-BandwidthFirewallRule -ProgramPath $iperf3Path
 
 if (-not $NoStart) {
     if ($DryRun) {

@@ -39,8 +39,10 @@
     ],
     "resources": {
       "../resources/easytier/windows-x64": "resources/easytier",
+      "../resources/iperf3/windows-x64": "resources/iperf3",
       "../resources/service/windows-x64": "resources/service",
       "../resources/easytier-runtime.manifest.json": "resources/easytier-runtime.manifest.json",
+      "../resources/iperf3-runtime.manifest.json": "resources/iperf3-runtime.manifest.json",
       "../scripts/Register-EasyTierService.ps1": "resources/scripts/Register-EasyTierService.ps1",
       "../scripts/Unregister-EasyTierService.ps1": "resources/scripts/Unregister-EasyTierService.ps1",
       "../scripts/Remove-VibeEasyTierState.ps1": "resources/scripts/Remove-VibeEasyTierState.ps1"

@@ -1,5 +1,6 @@
 use std::{
     fs,
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -19,7 +20,7 @@ use tauri::{
 use tauri_plugin_dialog::DialogExt;
 use vibe_easytier_service::service::{CORE_CONFIG_VALIDATION_ERROR_PREFIX, WINDOWS_SERVICE_NAME};
 use vibe_easytier_service::{
-    bandwidth::{run_bandwidth_test as measure_peer_bandwidth, DEFAULT_TEST_DURATION_SECONDS},
+    bandwidth::{run_iperf3_test, DEFAULT_TEST_DURATION_SECONDS},
     AddressMode, ConnectedPeer, ConnectionIntent, EasyTierFlags, IpcClient, NetworkProfile,
     ProfileUpsert, RpcCommand, RpcRequest, RpcResult, SecretString, ServiceConnectionState,
     ServiceStatus,
@@ -44,12 +45,13 @@ struct NativeState {
     client: IpcClient,
     next_request_id: AtomicU64,
     preferences_path: PathBuf,
+    iperf3_executable: PathBuf,
     preferences: Mutex<DesktopPreferences>,
     desktop_logs: Mutex<Vec<UiLog>>,
 }
 
 impl NativeState {
-    fn load(preferences_path: PathBuf) -> Self {
+    fn load(preferences_path: PathBuf, iperf3_executable: PathBuf) -> Self {
         let preferences = fs::read(&preferences_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -58,6 +60,7 @@ impl NativeState {
             client: IpcClient::windows_default(),
             next_request_id: AtomicU64::new(1),
             preferences_path,
+            iperf3_executable,
             preferences: Mutex::new(preferences),
             desktop_logs: Mutex::new(Vec::new()),
         }
@@ -718,9 +721,12 @@ async fn run_peer_bandwidth_test(
     state: State<'_, NativeState>,
     peer_id: String,
 ) -> Result<UiBandwidthTestResult, String> {
-    if state.service_status()?.state != ServiceConnectionState::Connected {
+    let status = state.service_status()?;
+    if status.state != ServiceConnectionState::Connected {
         return Err("私有网络尚未连接，无法进行节点间带宽测试。".to_owned());
     }
+    let profiles = state.profile_views()?;
+    let local_address = active_virtual_ipv4(&status, &profiles)?;
     let peer = state
         .connected_peers()?
         .into_iter()
@@ -732,9 +738,18 @@ async fn run_peer_bandwidth_test(
         .next()
         .and_then(|address| address.parse().ok())
         .ok_or_else(|| "目标节点没有可用的虚拟 IPv4 地址。".to_owned())?;
+    if peer_address == local_address {
+        return Err("不能对本机节点执行带宽测试。".to_owned());
+    }
+    let iperf3_executable = state.iperf3_executable.clone();
 
     let measurement = tokio::task::spawn_blocking(move || {
-        measure_peer_bandwidth(peer_address, DEFAULT_TEST_DURATION_SECONDS)
+        run_iperf3_test(
+            &iperf3_executable,
+            local_address,
+            peer_address,
+            DEFAULT_TEST_DURATION_SECONDS,
+        )
     })
     .await
     .map_err(|_| "带宽测试任务异常结束。".to_owned())?
@@ -749,6 +764,25 @@ async fn run_peer_bandwidth_test(
         duration_seconds: measurement.duration_seconds,
         tested_at: now_iso(),
     })
+}
+
+fn active_virtual_ipv4(
+    status: &ServiceStatus,
+    profiles: &[vibe_easytier_service::ProfileView],
+) -> Result<Ipv4Addr, String> {
+    let active_profile_id = status
+        .active_profile_id
+        .as_deref()
+        .ok_or_else(|| "当前没有活动私有网络档案。".to_owned())?;
+    let cidr = profiles
+        .iter()
+        .find(|profile| profile.id == active_profile_id)
+        .and_then(|profile| profile.static_ipv4_cidr.as_deref())
+        .ok_or_else(|| "活动档案没有可用的固定虚拟 IPv4 地址。".to_owned())?;
+    cidr.split('/')
+        .next()
+        .and_then(|address| address.parse().ok())
+        .ok_or_else(|| "活动档案的虚拟 IPv4 地址无效。".to_owned())
 }
 
 #[tauri::command]
@@ -1020,6 +1054,12 @@ fn export_file_name(profile_name: &str) -> String {
 /// can include adapter details or addresses that should not enter the webview.
 fn localize_bandwidth_error(error: std::io::Error) -> String {
     match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+            "内置 iperf3 测速组件缺失、损坏或无法启动，请重新安装应用。".to_owned()
+        }
+        std::io::ErrorKind::WouldBlock => {
+            "目标节点正在执行其他 iperf3 测速，请稍后重试。".to_owned()
+        }
         std::io::ErrorKind::ConnectionRefused
         | std::io::ErrorKind::TimedOut
         | std::io::ErrorKind::NotConnected
@@ -1033,7 +1073,10 @@ fn localize_bandwidth_error(error: std::io::Error) -> String {
             "节点间带宽测试连接中断，请检查网络稳定性后重试。".to_owned()
         }
         std::io::ErrorKind::InvalidData => {
-            "目标节点的带宽测试协议不兼容，请升级对方客户端。".to_owned()
+            "iperf3 返回了无效结果，请确认双方客户端版本一致。".to_owned()
+        }
+        std::io::ErrorKind::InvalidInput => {
+            "iperf3 测速参数无效，请检查活动档案的虚拟地址。".to_owned()
         }
         _ => "节点间带宽测试失败，请稍后重试。".to_owned(),
     }
@@ -1269,7 +1312,14 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|error| std::io::Error::other(error.to_string()))?
                 .join("desktop-preferences.json");
-            app.manage(NativeState::load(preferences_path));
+            let iperf3_executable = app
+                .path()
+                .resource_dir()
+                .map_err(|error| std::io::Error::other(error.to_string()))?
+                .join("resources")
+                .join("iperf3")
+                .join("iperf3.exe");
+            app.manage(NativeState::load(preferences_path, iperf3_executable));
 
             let show = MenuItem::with_id(app, "show", "显示 Vibe EasyTier", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出桌面端", true, None::<&str>)?;
@@ -1354,6 +1404,39 @@ mod tests {
         assert!(message.contains("目标节点"));
         assert!(!message.contains("100.64.0.8"));
         assert!(!message.contains("29999"));
+
+        let missing = localize_bandwidth_error(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "C:\\secret-install-path\\iperf3.exe",
+        ));
+        assert!(missing.contains("iperf3"));
+        assert!(!missing.contains("secret-install-path"));
+    }
+
+    #[test]
+    fn bandwidth_test_binds_to_the_active_profiles_virtual_ipv4() {
+        let mut status = ServiceStatus::stopped();
+        status.active_profile_id = Some("office".to_owned());
+        let profiles = vec![vibe_easytier_service::ProfileView {
+            id: "office".to_owned(),
+            name: "办公室".to_owned(),
+            instance_name: "vibe-office".to_owned(),
+            hostname: "workstation".to_owned(),
+            network_name: "office-net".to_owned(),
+            address_mode: AddressMode::Static {
+                cidr: "100.76.1.2/24".to_owned(),
+            },
+            static_ipv4_cidr: Some("100.76.1.2/24".to_owned()),
+            peers: Vec::new(),
+            flags: EasyTierFlags::default(),
+            auto_connect: true,
+            secret_configured: true,
+        }];
+
+        assert_eq!(
+            active_virtual_ipv4(&status, &profiles).unwrap(),
+            Ipv4Addr::new(100, 76, 1, 2)
+        );
     }
 
     #[test]

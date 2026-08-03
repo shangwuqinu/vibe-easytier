@@ -995,7 +995,7 @@ export const PeersPage = ({
         {peers.length ? (
           <table className="peer-table">
             <thead>
-              <tr><th>节点</th><th>地址</th><th>角色</th><th>状态</th><th>连接协议</th><th>延迟</th><th>版本</th><th>最近出现</th><th>带宽测试</th></tr>
+              <tr><th>节点</th><th>地址</th><th>角色</th><th>状态</th><th>连接协议</th><th>延迟</th><th>版本</th><th>最近出现</th><th>iperf3 测速</th></tr>
             </thead>
             <tbody>
               {peers.map((peer) => {
@@ -1010,19 +1010,19 @@ export const PeersPage = ({
                     <td data-label="延迟">{peer.state === 'offline' ? '--' : `${peer.latencyMs} ms`}</td>
                     <td data-label="版本">{peer.version}</td>
                     <td data-label="最近出现">{formatDateTime(peer.lastSeen)}</td>
-                    <td data-label="带宽测试">
+                    <td data-label="iperf3 测速">
                       {test?.status === 'success' && test.result ? (
                         <div className="bandwidth-result">
                           <span><ArrowDown size={13} />{formatBitsPerSecond(test.result.downloadBps)}</span>
                           <span><ArrowUp size={13} />{formatBitsPerSecond(test.result.uploadBps)}</span>
-                          <IconButton title="重新测试带宽" onClick={() => void runTest(peer.id)} disabled={testRunning}>
+                          <IconButton title="重新运行 iperf3 测速" onClick={() => void runTest(peer.id)} disabled={testRunning}>
                             <RefreshCw size={14} />
                           </IconButton>
                         </div>
                       ) : test?.status === 'error' ? (
                         <div className="bandwidth-error">
                           <span>{test.error}</span>
-                          <IconButton title="重试带宽测试" onClick={() => void runTest(peer.id)} disabled={testRunning}>
+                          <IconButton title="重试 iperf3 测速" onClick={() => void runTest(peer.id)} disabled={testRunning}>
                             <RefreshCw size={14} />
                           </IconButton>
                         </div>

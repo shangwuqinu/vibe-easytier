@@ -9,13 +9,14 @@ Fetch the matching runtime before building the installer:
 
 ~~~powershell
 pwsh -NoProfile -File .\scripts\Fetch-EasyTierRuntime.ps1 -Architecture x64
+pwsh -NoProfile -File .\scripts\Fetch-Iperf3Runtime.ps1 -Architecture x64
 cargo build --release --package vibe-easytier-service --target x86_64-pc-windows-msvc
 pwsh -NoProfile -File .\scripts\Stage-VibeEasyTierService.ps1 -Architecture x64
 pwsh -NoProfile -File .\scripts\Test-EasyTierPackaging.ps1 -Architecture x64 -RequireRuntime -RequireServiceBinary
 ~~~
 
-Use arm64 for an ARM64 Tauri target. The pinned asset names, release tag,
-sizes, and SHA-256 values live in resources/easytier-runtime.manifest.json.
+The v1 installer target is Windows x64. Pinned asset names, release tags,
+sizes, and SHA-256 values live in the EasyTier and iperf3 runtime manifests.
 
 ## Tauri Configuration
 
@@ -33,6 +34,8 @@ The resulting resource layout is:
 
 ~~~text
 $INSTDIR\resources\easytier\easytier-core.exe
+$INSTDIR\resources\iperf3\iperf3.exe
+$INSTDIR\resources\iperf3\cygwin1.dll
 $INSTDIR\resources\service\vibe-easytier-service.exe
 $INSTDIR\resources\scripts\Register-EasyTierService.ps1
 $INSTDIR\resources\scripts\Unregister-EasyTierService.ps1
@@ -62,16 +65,15 @@ is still registered at boot so the service is durable before the first
 private-network profile is created.
 
 The installer invokes Register-EasyTierService.ps1 with the installed service
-binary, the installed EasyTier runtime directory, and the ProgramData state
-directory. The script creates a System-and-Administrators-only state directory,
-configures delayed start plus recovery actions, and starts the
-supervisor with --service, --state-root, and --core arguments. The supervisor,
-not SCM or the desktop UI, owns easytier-core.exe and the generated runtime
-TOML. Do not use a second user-login auto-launcher for easytier-core.exe; it
-would create competing instances with the boot service.
+binary, the installed EasyTier and iperf3 runtime directories, and the
+ProgramData state directory. The script creates a System-and-Administrators-only
+state directory, configures delayed start plus recovery actions, and starts the
+supervisor with `--service`, `--state-root`, `--core`, and `--iperf3` arguments.
+The supervisor, not SCM or the desktop UI, owns `easytier-core.exe`, the
+generated runtime TOML, and the virtual-IP-bound iperf3 server.
 
-Registration also creates the program-scoped inbound TCP 29999 firewall rule
-used by node-to-node bandwidth tests. The listener binds only to the active
+Registration also creates an `iperf3.exe`-scoped inbound TCP 29999 firewall
+rule used by node-to-node bandwidth tests. iperf3 binds only to the active
 EasyTier virtual IPv4 address. Upgrades replace the rule in place; a real
 uninstall removes it, while `-KeepRegistration` preserves it during the
 PREINSTALL stop window.
@@ -86,8 +88,7 @@ state even though NSIS may add its internal `_?=` self-copy argument.
 
 ## Verification
 
-Run Test-EasyTierService.ps1 with the installed service binary, the installed
-runtime directory, the ProgramData state directory, and -RequireRunning. The
-test checks the managed service's image path, automatic start mode, delayed
-start registry flag, and current state. It reports the configured recovery
-actions without intentionally crashing the VPN process.
+Run `Test-EasyTierService.ps1` with the installed service binary, EasyTier and
+iperf3 runtime directories, the ProgramData state directory, and
+`-RequireRunning`. Packaging validation also runs real loopback iperf3 upload
+and reverse-download probes before creating the installer.

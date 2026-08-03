@@ -23,7 +23,7 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    bandwidth::BandwidthBindTarget,
+    bandwidth::Iperf3BindTarget,
     crypto::{DpapiProtector, StateProtector},
     ipc::{RpcHandler, DEFAULT_PIPE_ENDPOINT},
     profile::{
@@ -42,6 +42,7 @@ use crate::{
 
 pub const WINDOWS_SERVICE_NAME: &str = crate::ipc::WINDOWS_SERVICE_NAME;
 pub const CORE_PATH_ENV: &str = "VIBE_EASYTIER_CORE_PATH";
+pub const IPERF3_PATH_ENV: &str = "VIBE_EASYTIER_IPERF3_PATH";
 pub const OWNER_SID_ENV: &str = "VIBE_EASYTIER_OWNER_SID";
 /// Stable, sanitized marker used when a staged Core config cannot be
 /// validated. The desktop maps the small token vocabulary to Chinese text;
@@ -60,6 +61,7 @@ pub struct ServiceOptions {
     pub mode: HostMode,
     pub state_root: Option<PathBuf>,
     pub core_executable: Option<PathBuf>,
+    pub iperf3_executable: Option<PathBuf>,
     /// The Windows SID allowed to issue mutating local-pipe requests. The
     /// installer passes it with `--owner-sid`; admins always retain access.
     pub owner_sid: Option<String>,
@@ -72,6 +74,7 @@ impl Default for ServiceOptions {
             mode: HostMode::Console,
             state_root: None,
             core_executable: None,
+            iperf3_executable: None,
             owner_sid: std::env::var(OWNER_SID_ENV).ok(),
             poll_interval: Duration::from_secs(1),
         }
@@ -107,6 +110,13 @@ impl ServiceOptions {
                     ServiceError::InvalidArguments("--core requires an executable path".to_owned())
                 })?;
                 options.core_executable = Some(PathBuf::from(path));
+            } else if argument.as_os_str() == OsStr::new("--iperf3") {
+                let path = arguments.next().ok_or_else(|| {
+                    ServiceError::InvalidArguments(
+                        "--iperf3 requires an executable path".to_owned(),
+                    )
+                })?;
+                options.iperf3_executable = Some(PathBuf::from(path));
             } else if argument.as_os_str() == OsStr::new("--owner-sid") {
                 let owner_sid = arguments.next().ok_or_else(|| {
                     ServiceError::InvalidArguments("--owner-sid requires a Windows SID".to_owned())
@@ -165,7 +175,7 @@ impl ServiceOptions {
     }
 
     pub const fn usage() -> &'static str {
-        "usage: vibe-easytier-service (--service|--console) [--state-root PATH] [--core PATH] [--owner-sid SID] [--poll-ms N]"
+        "usage: vibe-easytier-service (--service|--console) [--state-root PATH] [--core PATH] [--iperf3 PATH] [--owner-sid SID] [--poll-ms N]"
     }
 
     pub fn service_paths(&self) -> ServicePaths {
@@ -191,6 +201,24 @@ impl ServiceOptions {
         #[cfg(not(windows))]
         let core_name = "easytier-core";
         Ok(directory.join(core_name))
+    }
+
+    fn resolve_iperf3_executable(&self) -> Result<PathBuf, ServiceError> {
+        if let Some(path) = &self.iperf3_executable {
+            return Ok(path.clone());
+        }
+        if let Some(path) = std::env::var_os(IPERF3_PATH_ENV) {
+            return Ok(PathBuf::from(path));
+        }
+        let executable = std::env::current_exe()?;
+        let directory = executable.parent().ok_or_else(|| {
+            ServiceError::InvalidArguments("service executable has no parent directory".to_owned())
+        })?;
+        #[cfg(windows)]
+        let iperf3_name = "iperf3.exe";
+        #[cfg(not(windows))]
+        let iperf3_name = "iperf3";
+        Ok(directory.join(iperf3_name))
     }
 }
 
@@ -525,20 +553,14 @@ impl<P: StateProtector> ServiceController<P> {
             .and_then(|profile_id| self.state.profiles.get(profile_id))
     }
 
-    fn bandwidth_bind_target(&self) -> Option<BandwidthBindTarget> {
+    fn iperf3_bind_target(&self) -> Option<Iperf3BindTarget> {
         if self.core_pid.is_none() {
             return None;
         }
         let AddressMode::Static { cidr } = &self.active_profile()?.address_mode else {
             return None;
         };
-        let allowed_peers = self
-            .observed_peers
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|peer| peer.ipv4.split('/').next()?.parse().ok());
-        BandwidthBindTarget::from_cidr(cidr).map(|target| target.with_allowed_peers(allowed_peers))
+        Iperf3BindTarget::from_cidr(cidr)
     }
 
     fn prepare_core_launch(&self, expected_profile_id: &str) -> Result<CoreLaunch, ServiceError> {
@@ -2022,6 +2044,7 @@ pub fn run_until_stopped(options: ServiceOptions, stop: &AtomicBool) -> Result<(
         if !core_executable.is_file() {
             return Err(ServiceError::MissingCore(core_executable));
         }
+        let iperf3_executable = options.resolve_iperf3_executable()?;
         let store = StateStore::new(options.service_paths(), DpapiProtector);
         let controller = Arc::new(Mutex::new(ServiceController::load(
             store,
@@ -2051,20 +2074,16 @@ pub fn run_until_stopped(options: ServiceOptions, stop: &AtomicBool) -> Result<(
         let bandwidth_target_for_thread = Arc::clone(&bandwidth_target);
         let bandwidth_stop = Arc::new(AtomicBool::new(false));
         let bandwidth_stop_for_thread = Arc::clone(&bandwidth_stop);
-        let bandwidth_controller = Arc::clone(&controller);
-        let _bandwidth_thread = thread::Builder::new()
+        let bandwidth_thread = thread::Builder::new()
             .name("vibe-easytier-bandwidth".to_owned())
             .spawn(move || {
-                if let Err(error) = crate::bandwidth::serve_until(
+                let _ = crate::bandwidth::serve_iperf3_until(
+                    &iperf3_executable,
                     &bandwidth_stop_for_thread,
                     &bandwidth_target_for_thread,
-                ) {
-                    if let Ok(mut controller) = bandwidth_controller.lock() {
-                        controller.record_error(format!("bandwidth test server stopped: {error}"));
-                    }
-                }
+                );
             })
-            .map_err(ServiceError::CoreProcess)?;
+            .ok();
         let mut runner = CoreRunner::new(Some(core_executable));
         let mut network_monitor = crate::network::NetworkMonitor::new();
         let mut previous_loop_at = Instant::now();
@@ -2143,7 +2162,7 @@ pub fn run_until_stopped(options: ServiceOptions, stop: &AtomicBool) -> Result<(
                 let desired_target = controller
                     .lock()
                     .map_err(|_| ServiceError::Synchronization)?
-                    .bandwidth_bind_target();
+                    .iperf3_bind_target();
                 *bandwidth_target
                     .lock()
                     .map_err(|_| ServiceError::Synchronization)? = desired_target;
@@ -2160,6 +2179,9 @@ pub fn run_until_stopped(options: ServiceOptions, stop: &AtomicBool) -> Result<(
             .lock()
             .map_err(|_| ServiceError::Synchronization)? = None;
         bandwidth_stop.store(true, Ordering::Release);
+        if let Some(bandwidth_thread) = bandwidth_thread {
+            let _ = bandwidth_thread.join();
+        }
         ipc_stop.store(true, Ordering::Release);
         Ok(())
     }
@@ -2905,9 +2927,20 @@ mod tests {
             ServiceOptions::parse(["--service", "--console"]),
             Err(ServiceError::InvalidArguments(_))
         ));
-        let options = ServiceOptions::parse(["--service", "--state-root", "C:\\state"]).unwrap();
+        let options = ServiceOptions::parse([
+            "--service",
+            "--state-root",
+            "C:\\state",
+            "--iperf3",
+            "C:\\runtime\\iperf3.exe",
+        ])
+        .unwrap();
         assert_eq!(options.mode, HostMode::Service);
         assert_eq!(options.state_root, Some(PathBuf::from("C:\\state")));
+        assert_eq!(
+            options.iperf3_executable,
+            Some(PathBuf::from("C:\\runtime\\iperf3.exe"))
+        );
         assert!(matches!(
             ServiceOptions::parse(["--service", "--owner-sid", "not-a-sid"]),
             Err(ServiceError::InvalidArguments(_))

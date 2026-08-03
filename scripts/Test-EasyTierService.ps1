@@ -7,6 +7,8 @@ param(
 
     [string]$ExpectedRuntimeDirectory,
 
+    [string]$ExpectedIperf3Directory,
+
     [string]$ExpectedStateDirectory = (Join-Path $env:ProgramData 'VibeEasyTier'),
 
     [string]$ExpectedOwnerSid,
@@ -91,6 +93,9 @@ if ($imagePath -notmatch '(^|\s)--service(\s|$)') {
 if ($imagePath -notmatch '(^|\s)--owner-sid(\s|$)') {
     throw "Service $ServiceName is not configured with a named-pipe owner SID."
 }
+if ($imagePath -notmatch '(^|\s)--iperf3(\s|$)') {
+    throw "Service $ServiceName is not configured with the bundled iperf3 runtime."
+}
 
 if (-not [string]::IsNullOrWhiteSpace($ExpectedServiceBinaryPath)) {
     Assert-ImageContains -ImagePath $imagePath -Expected ([System.IO.Path]::GetFullPath($ExpectedServiceBinaryPath)) -Description 'service binary path'
@@ -98,6 +103,9 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedServiceBinaryPath)) {
 
 if (-not [string]::IsNullOrWhiteSpace($ExpectedRuntimeDirectory)) {
     Assert-ImageContains -ImagePath $imagePath -Expected ([System.IO.Path]::GetFullPath($ExpectedRuntimeDirectory)) -Description 'runtime directory'
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpectedIperf3Directory)) {
+    Assert-ImageContains -ImagePath $imagePath -Expected ([System.IO.Path]::GetFullPath($ExpectedIperf3Directory)) -Description 'iperf3 runtime directory'
 }
 
 if (-not [string]::IsNullOrWhiteSpace($ExpectedStateDirectory)) {

@@ -22,7 +22,7 @@ easytier_preinstall_done:
   ; Register immediately, including on a first installation with no profile.
   ; The service holds an empty desired state until the desktop client creates
   ; the first encrypted private-network profile.
-    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\resources\scripts\Register-EasyTierService.ps1" -ServiceBinaryPath "$INSTDIR\resources\service\vibe-easytier-service.exe" -RuntimeDirectory "$INSTDIR\resources\easytier" -ServiceName "VibeEasyTierService"'
+    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\resources\scripts\Register-EasyTierService.ps1" -ServiceBinaryPath "$INSTDIR\resources\service\vibe-easytier-service.exe" -RuntimeDirectory "$INSTDIR\resources\easytier" -Iperf3Directory "$INSTDIR\resources\iperf3" -ServiceName "VibeEasyTierService"'
     Pop $0
     StrCmp $0 0 easytier_postinstall_done
     DetailPrint "Vibe EasyTier service registration failed (exit $0)."

@@ -115,6 +115,7 @@ Assert-CleanPrecondition -Name $ServiceName -InstallPath $InstallDirectory -Stat
 $serviceTestScript = Join-Path $PSScriptRoot 'Test-EasyTierService.ps1'
 $serviceBinary = Join-Path $InstallDirectory 'resources\service\vibe-easytier-service.exe'
 $runtimeDirectory = Join-Path $InstallDirectory 'resources\easytier'
+$iperf3Directory = Join-Path $InstallDirectory 'resources\iperf3'
 $uninstaller = Join-Path $InstallDirectory 'uninstall.exe'
 $upgradeSentinel = Join-Path $StateDirectory 'upgrade-state-sentinel.txt'
 $upgradeSentinelValue = 'vibe-easytier-upgrade-state-preserved'
@@ -128,6 +129,7 @@ try {
         -ServiceName $ServiceName `
         -ExpectedServiceBinaryPath $serviceBinary `
         -ExpectedRuntimeDirectory $runtimeDirectory `
+        -ExpectedIperf3Directory $iperf3Directory `
         -ExpectedStateDirectory $StateDirectory `
         -RequireRunning
 
@@ -140,6 +142,7 @@ try {
         -ServiceName $ServiceName `
         -ExpectedServiceBinaryPath $serviceBinary `
         -ExpectedRuntimeDirectory $runtimeDirectory `
+        -ExpectedIperf3Directory $iperf3Directory `
         -ExpectedStateDirectory $StateDirectory `
         -RequireRunning
     if (-not (Test-Path -LiteralPath $upgradeSentinel) -or
