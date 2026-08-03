@@ -34,7 +34,9 @@ supervisor for the pinned core process.
   Vibe service version; the installer scopes TCP 29999 to `iperf3.exe` in
   Windows Firewall and removes the rule on uninstall. Service-owned executable
   directories allow normal users to read and run binaries but not replace
-  LocalSystem child executables.
+  LocalSystem child executables. Server startup prepares a kill-on-close
+  Windows Job Object before launching iperf3 and terminates a child that cannot
+  be assigned, so a failed startup cannot leave a stale listener behind.
 - Network secrets are encrypted in service-owned state with Windows DPAPI.
   The service writes the active secret only to an ACL-protected runtime TOML,
   keeping it out of the core process command line. The desktop UI gets a
@@ -92,9 +94,18 @@ EasyTier is locked to v2.6.4 and iperf3 is locked to 3.21 in their respective
 runtime manifests under `resources`. Validate both inputs before bundling:
 
 ```powershell
+pwsh -NoProfile -File .\scripts\Fetch-EasyTierRuntime.ps1 -Architecture x64
+pwsh -NoProfile -File .\scripts\Fetch-Iperf3Runtime.ps1 -Architecture x64
+cargo build --release -p vibe-easytier-service --target x86_64-pc-windows-msvc
+pwsh -NoProfile -File .\scripts\Stage-VibeEasyTierService.ps1 -Architecture x64
 pwsh -NoProfile -File .\scripts\Test-EasyTierPackaging.ps1 -Architecture x64 -RequireRuntime -RequireServiceBinary -VerifyReleaseMetadata
 npm --prefix .\apps\desktop run desktop:build
 ```
+
+The generated EasyTier and iperf3 runtime directories are ignored by Git. A
+clean checkout, including the Windows CI runner, must execute both runtime
+fetch scripts before using `-RequireRuntime`; keep the workflow and Tauri
+resource mappings synchronized when either runtime changes.
 
 Do not place profile TOML files or private-network secrets under `resources`.
 They belong to the protected service state beneath `%ProgramData%\VibeEasyTier`.

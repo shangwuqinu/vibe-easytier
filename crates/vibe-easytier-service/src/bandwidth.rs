@@ -432,17 +432,19 @@ impl Iperf3Server {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         hide_window(&mut command);
-        let mut child = command.spawn()?;
         #[cfg(windows)]
-        let job = {
+        let job = ProcessJob::new()?;
+        let child = command.spawn()?;
+        #[cfg(windows)]
+        let child = {
             use std::os::windows::io::AsRawHandle;
-            let job = ProcessJob::new()?;
+            let mut child = child;
             if let Err(error) = job.assign(child.as_raw_handle() as isize) {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(error);
             }
-            job
+            child
         };
         Ok(Self {
             child,
@@ -487,10 +489,11 @@ impl ProcessJob {
             )
         };
         if configured == 0 {
+            let error = io::Error::last_os_error();
             unsafe {
                 CloseHandle(handle);
             }
-            return Err(io::Error::last_os_error());
+            return Err(error);
         }
         Ok(Self { handle })
     }

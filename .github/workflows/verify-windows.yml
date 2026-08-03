@@ -46,6 +46,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/Fetch-EasyTierRuntime.ps1 -Architecture x64
+          ./scripts/Fetch-Iperf3Runtime.ps1 -Architecture x64
           ./scripts/Stage-VibeEasyTierService.ps1 -Architecture x64
           ./scripts/Test-EasyTierPackaging.ps1 -Architecture x64 -RequireRuntime -RequireServiceBinary -VerifyReleaseMetadata
 
