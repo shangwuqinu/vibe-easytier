@@ -1,9 +1,16 @@
 # Vibe EasyTier
 
-Vibe EasyTier is a Windows x64 desktop client for a deliberately small
-EasyTier private virtual-LAN workflow. The desktop process owns neither
-`easytier-core` nor its management endpoint: `VibeEasyTierService` is the sole
-supervisor for the pinned core process.
+Vibe EasyTier provides focused clients for a deliberately small EasyTier
+private virtual-LAN workflow. The primary Windows x64 desktop process owns
+neither `easytier-core` nor its management endpoint: `VibeEasyTierService` is
+the sole supervisor for the pinned core process.
+
+The repository also contains an Android 14 arm64 implementation under
+[`a14`](a14/README.md). It preserves the private-network profile and recovery
+semantics while replacing the Windows service boundary with Android
+`VpnService` and the official EasyTier v2.6.4 JNI layer. See its
+[feasibility assessment](a14/FEASIBILITY.md) before treating boot connection as
+equivalent across consumer Android firmware.
 
 ## Guarantees
 
@@ -66,6 +73,8 @@ shared-host account isolation.
   ACL helpers, local IPC, profile parsing, and child-process supervisor.
 - `scripts` and `installer`: pinned runtime staging plus per-machine NSIS
   registration hooks.
+- `a14`: Android 14 application, secure profile store, `VpnService`, tests,
+  and pinned EasyTier JNI staging script.
 
 ## Local Development
 

@@ -8,6 +8,9 @@
   bridge.
 - `crates/vibe-easytier-service/` owns the Windows service, DPAPI state,
   named-pipe IPC, profile validation, and EasyTier Core supervision.
+- `a14/` contains the independent Android 14 arm64 client. It uses Android
+  `VpnService`, Android Keystore, and the pinned EasyTier JNI runtime; it must
+  not depend on Windows service or DPAPI code.
 - `resources/` holds pinned, verified runtime assets; `scripts/` stages and
   validates them; `installer/` contains NSIS service hooks. Do not place user
   profiles, TOML files, or secrets in these directories.
@@ -23,6 +26,8 @@ npm --prefix .\apps\desktop run build
 cargo fmt --all -- --check
 cargo test --workspace --locked
 pwsh -NoProfile -File .\scripts\Test-EasyTierPackaging.ps1 -Architecture x64 -RequireRuntime -RequireServiceBinary -VerifyReleaseMetadata
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+.\a14\gradlew.bat -p .\a14 testDebugUnitTest assembleDebug lintDebug
 ```
 
 Create a release installer by building and staging the service, then running

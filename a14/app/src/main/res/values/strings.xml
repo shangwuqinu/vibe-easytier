@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Vibe EasyTier</string>
+    <string name="vpn_channel_name">私有网络连接</string>
+    <string name="vpn_channel_description">显示 EasyTier 私有网络的连接状态</string>
+</resources>
+

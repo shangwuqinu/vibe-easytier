@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.vibeeasytier.a14'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.vibeeasytier.a14'
+        minSdk 34
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+
+        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    implementation('org.tomlj:tomlj:1.1.1') {
+        // tomlj only uses these annotations at compile time. Excluding the
+        // exact checker-qual pin also keeps offline Android builds reliable.
+        exclude group: 'org.checkerframework', module: 'checker-qual'
+    }
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}
+
+tasks.register('verifyEasyTierNative') {
+    doLast {
+        def runtimeDir = file('src/main/jniLibs/arm64-v8a')
+        ['libeasytier_ffi.so', 'libeasytier_android_jni.so'].each { name ->
+            def library = new File(runtimeDir, name)
+            if (!library.isFile() || library.length() == 0) {
+                throw new GradleException("Missing pinned EasyTier Android runtime: ${library}")
+            }
+        }
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == 'preDebugBuild' || task.name == 'preReleaseBuild') {
+        task.dependsOn tasks.named('verifyEasyTierNative')
+    }
+}

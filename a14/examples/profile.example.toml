@@ -1,0 +1,31 @@
+instance_name = "vibe-a14"
+hostname = "Android"
+ipv4 = "100.76.1.8/24"
+
+[network_identity]
+network_name = "private-network"
+network_secret = "replace-before-import"
+
+[[peer]]
+uri = "tcp://seed.example.com:11010"
+
+[[peer]]
+uri = "udp://seed.example.com:11011"
+
+[[peer]]
+uri = "wg://seed.example.com:11012"
+
+[flags]
+enable_encryption = true
+enable_ipv6 = true
+latency_first = true
+enable_exit_node = false
+no_tun = false
+use_smoltcp = false
+mtu = 1300
+enable_kcp_proxy = true
+bind_device = true
+private_mode = true
+multi_thread = true
+encryption_algorithm = "aes-gcm"
+
