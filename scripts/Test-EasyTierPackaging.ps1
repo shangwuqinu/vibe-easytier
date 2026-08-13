@@ -234,8 +234,11 @@ if ($registerScript.IndexOf('New-NetFirewallRule', [StringComparison]::Ordinal) 
 if ($registerScript.IndexOf('--iperf3', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('Set-BandwidthFirewallRule -ProgramPath $iperf3Path', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service registration must supervise bundled iperf3 and scope its firewall rule to iperf3.exe.'
 }
-if ($registerScript.IndexOf('Protect-ExecutableDirectory', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('S-1-5-32-545', [StringComparison]::Ordinal) -lt 0) {
+if ($registerScript.IndexOf('Protect-ExecutableDirectory', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('Set-ProtectedDirectoryAcl', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf(';;;BU)', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service registration must prevent normal users from replacing LocalSystem child executables.'
+}
+if ($registerScript.IndexOf('[System.IO.Directory]::SetAccessControl', [StringComparison]::Ordinal) -lt 0 -or $registerScript -match '(?im)^\s*Set-Acl\b') {
+    throw 'Service registration must apply protected ACLs without relying on PowerShell Security module autoloading.'
 }
 if ($registerScript.IndexOf('Node bandwidth tests may be blocked.', [StringComparison]::Ordinal) -lt 0) {
     throw 'A managed firewall policy must not prevent the boot service from being registered and started.'

@@ -107,6 +107,24 @@ function Assert-ExistingDirectory {
     }
 }
 
+function Set-ProtectedDirectoryAcl {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Sddl
+    )
+
+    # GitHub-hosted Windows runners can discover Set-Acl but fail to load its
+    # inbox module in a noninteractive installer. The service installer runs
+    # under Windows PowerShell 5.1, whose framework Directory API applies the
+    # same protected DACL without module autoloading or a console process.
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetSecurityDescriptorSddlForm($Sddl)
+    [System.IO.Directory]::SetAccessControl($Path, $acl)
+}
+
 function Protect-StateDirectory {
     param(
         [Parameter(Mandatory)]
@@ -122,20 +140,7 @@ function Protect-StateDirectory {
 
     # State contains DPAPI-protected network material. Normal desktop users use
     # the named-pipe boundary; they never need direct ProgramData access.
-    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetAccessRuleProtection($true, $false)
-    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-    $propagation = [System.Security.AccessControl.PropagationFlags]::None
-    $allow = [System.Security.AccessControl.AccessControlType]::Allow
-    $full = [System.Security.AccessControl.FileSystemRights]::FullControl
-
-    foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
-        $sid = [System.Security.Principal.SecurityIdentifier]::new($sidText)
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inheritance, $propagation, $allow)
-        [void]$acl.AddAccessRule($rule)
-    }
-
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    Set-ProtectedDirectoryAcl -Path $Path -Sddl 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
 }
 
 function Protect-ExecutableDirectory {
@@ -149,23 +154,7 @@ function Protect-ExecutableDirectory {
         return
     }
 
-    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetAccessRuleProtection($true, $false)
-    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-    $propagation = [System.Security.AccessControl.PropagationFlags]::None
-    $allow = [System.Security.AccessControl.AccessControlType]::Allow
-    $full = [System.Security.AccessControl.FileSystemRights]::FullControl
-    $readExecute = [System.Security.AccessControl.FileSystemRights]::ReadAndExecute
-
-    foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
-        $sid = [System.Security.Principal.SecurityIdentifier]::new($sidText)
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inheritance, $propagation, $allow)
-        [void]$acl.AddAccessRule($rule)
-    }
-    $usersSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
-    $usersRule = [System.Security.AccessControl.FileSystemAccessRule]::new($usersSid, $readExecute, $inheritance, $propagation, $allow)
-    [void]$acl.AddAccessRule($usersRule)
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    Set-ProtectedDirectoryAcl -Path $Path -Sddl 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)'
 }
 
 function Set-BandwidthFirewallRule {
