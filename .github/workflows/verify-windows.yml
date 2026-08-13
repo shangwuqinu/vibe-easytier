@@ -80,13 +80,6 @@ jobs:
           }
           Write-Output "Built NSIS installer: $($installer.FullName)"
 
-      - name: Smoke test fresh install, upgrade, and uninstall
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem -Path .\target\release\bundle\nsis -Filter '*.exe' -File -Recurse | Select-Object -First 1
-          .\scripts\Invoke-EasyTierInstallerSmoke.ps1 -InstallerPath $installer.FullName
-
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
@@ -94,6 +87,13 @@ jobs:
           path: target/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 14
+
+      - name: Smoke test fresh install, upgrade, and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path .\target\release\bundle\nsis -Filter '*.exe' -File -Recurse | Select-Object -First 1
+          .\scripts\Invoke-EasyTierInstallerSmoke.ps1 -InstallerPath $installer.FullName
 
   android:
     name: Android 14 arm64 APK

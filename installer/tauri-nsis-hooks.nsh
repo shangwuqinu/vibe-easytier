@@ -22,12 +22,22 @@ easytier_preinstall_done:
   ; Register immediately, including on a first installation with no profile.
   ; The service holds an empty desired state until the desktop client creates
   ; the first encrypted private-network profile.
-    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\resources\scripts\Register-EasyTierService.ps1" -ServiceBinaryPath "$INSTDIR\resources\service\vibe-easytier-service.exe" -RuntimeDirectory "$INSTDIR\resources\easytier" -Iperf3Directory "$INSTDIR\resources\iperf3" -ServiceName "VibeEasyTierService"'
+    ; Save the registration output outside the installation directory until
+    ; the smoke test has confirmed success. Silent CI installers otherwise
+    ; expose only NSIS exit code 2 and hide the actionable PowerShell error.
+    Delete "$TEMP\VibeEasyTierService-install.log"
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\resources\scripts\Register-EasyTierService.ps1" -ServiceBinaryPath "$INSTDIR\resources\service\vibe-easytier-service.exe" -RuntimeDirectory "$INSTDIR\resources\easytier" -Iperf3Directory "$INSTDIR\resources\iperf3" -ServiceName "VibeEasyTierService"'
     Pop $0
-    StrCmp $0 0 easytier_postinstall_done
+    Pop $1
+    StrCmp $0 0 easytier_postinstall_success
+    FileOpen $2 "$TEMP\VibeEasyTierService-install.log" w
+    FileWrite $2 "$1$\r$\n"
+    FileClose $2
     DetailPrint "Vibe EasyTier service registration failed (exit $0)."
     Abort "Vibe EasyTier could not register its boot service. The installation stopped before the client could be used."
 
+easytier_postinstall_success:
+    Delete "$TEMP\VibeEasyTierService-install.log"
 easytier_postinstall_done:
 !macroend
 

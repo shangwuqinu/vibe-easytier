@@ -31,9 +31,20 @@ function Invoke-SilentInstaller {
         [string]$Action
     )
 
+    $diagnosticLog = Join-Path $env:TEMP 'VibeEasyTierService-install.log'
+    Remove-Item -LiteralPath $diagnosticLog -Force -ErrorAction SilentlyContinue
+
     $process = Start-Process -FilePath $Path -ArgumentList '/S' -PassThru -Wait
     if ($process.ExitCode -ne 0) {
-        throw "$Action failed with exit code $($process.ExitCode)."
+        $details = if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) {
+            $content = (Get-Content -LiteralPath $diagnosticLog -Raw).Trim()
+            # CI diagnostics must not disclose the interactive pipe owner's SID.
+            [regex]::Replace($content, 'S-1-(?:[0-9]+-){1,14}[0-9]+', '[SID]')
+        }
+        else {
+            'The installer did not emit a service-registration diagnostic log.'
+        }
+        throw "$Action failed with exit code $($process.ExitCode). Service registration: $details"
     }
 }
 
