@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PinnedCommit = '8428a89d2dabc94c97d370ec607c6ca142473626'
-$RustToolchain = '1.95'
+$RustToolchain = '1.95.0'
 $RustTarget = 'aarch64-linux-android'
 $AndroidAbi = 'arm64-v8a'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
