@@ -50,6 +50,9 @@ function Get-ReleaseAsset {
         'Accept' = 'application/vnd.github+json'
         'User-Agent' = 'VibeEasyTier-RuntimeFetcher'
     }
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
+        $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
+    }
 
     $release = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
     if ([string]$release.tag_name -ne [string]$Manifest.upstream.tag) {

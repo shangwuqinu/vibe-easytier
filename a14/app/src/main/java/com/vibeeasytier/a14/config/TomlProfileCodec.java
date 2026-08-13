@@ -14,8 +14,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 
 public final class TomlProfileCodec {
+    private static final String UNLIMITED_U64 = "18446744073709551615";
+    private static final Pattern UNLIMITED_RATE = Pattern.compile(
+            "(?m)^\\s*(foreign_relay_bps_limit|instance_recv_bps_limit)\\s*=\\s*"
+                    + UNLIMITED_U64 + "\\s*(?:#.*)?$");
     public static final Set<String> FLAG_KEYS = Set.of(
             "default_protocol", "dev_name", "enable_encryption", "enable_ipv6", "mtu",
             "latency_first", "enable_exit_node", "no_tun", "use_smoltcp",
@@ -35,7 +40,9 @@ public final class TomlProfileCodec {
     private TomlProfileCodec() {}
 
     public static Profile parse(String source, String fallbackHostname) {
-        TomlParseResult root = Toml.parse(source);
+        // tomlj models integers as signed longs. EasyTier uses u64::MAX only as
+        // the unlimited sentinel, which is equivalent to omitting these fields.
+        TomlParseResult root = Toml.parse(normalizeUnlimitedRates(source));
         if (root.hasErrors()) {
             throw new IllegalArgumentException("TOML 格式错误，请检查文件语法");
         }
@@ -111,6 +118,22 @@ public final class TomlProfileCodec {
             }
         }
         return output.toString();
+    }
+
+    private static String normalizeUnlimitedRates(String source) {
+        StringBuilder normalized = new StringBuilder(source.length());
+        boolean inFlags = false;
+        for (String line : source.split("\\R", -1)) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                inFlags = "[flags]".equals(trimmed);
+            }
+            if (!inFlags || !UNLIMITED_RATE.matcher(line).matches()) {
+                normalized.append(line);
+            }
+            normalized.append('\n');
+        }
+        return normalized.toString();
     }
 
     private static void appendString(StringBuilder output, String key, String value) {

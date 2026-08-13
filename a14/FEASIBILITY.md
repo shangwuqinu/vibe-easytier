@@ -17,8 +17,9 @@ LocalSystem 服务模型：正确边界是应用内 Core 加 Android `VpnService
 | 开机自动连接 | 中高 | BootReceiver 已实现；Always-on VPN 才是系统级稳定路径 |
 | 完全无人值守首次连接 | 不可行 | Android 首次必须由用户确认 VPN 授权 |
 | 厂商 ROM 全面保活 | 中 | 仍受电池策略和厂商后台管理影响，必须真机验收 |
-| 桌面 41 项 flags 完整可视编辑 | 中 | TOML 可导入全部白名单；移动界面仅展示稳定常用项 |
-| iperf3 节点测速 | 中 | 暂未打包 Android 原生 iperf3，不能复用 Windows EXE |
+| 桌面 41 项 flags 完整可视编辑 | 高 | 已全部展示中文名称和说明，平台不适用项锁定 |
+| 多档案、路由流量、节点详情和日志搜索 | 高 | 已与 Windows 用户功能对齐 |
+| iperf3 节点测速 | 受限 | 同 UID 必须排除在自身 VPN 外，子进程无法通过虚拟地址测速 |
 
 ## 稳定性判断
 
@@ -35,7 +36,8 @@ Android 14 要求前台服务声明具体类型及对应权限。本实现使用
 
 - 用 NDK r26 构建并暂存固定提交的两个 `.so`，记录供应链哈希和 LGPL 通知。
 - 两节点真实网络测试，以及重启、断网、Doze、进程回收、系统撤权测试。
-- 补齐 Android 原生 iperf3 后再开放带宽测试，避免伪造或降级测速结果。
+- 带宽测试需要独立 UID 伴随应用或上游 JNI 逐套接字保护能力；在此之前不开放
+  会绕过隧道的 iperf3 按钮。
 - 若要求所有设备都无需人工设置 Always-on VPN，需要 Device Owner/MDM 部署；
   普通消费级 APK 无权静默完成该系统设置。
 
@@ -45,4 +47,3 @@ Android 14 要求前台服务声明具体类型及对应权限。本实现使用
 - [EasyTier v2.6.4 GUI 移动端工程](https://github.com/EasyTier/EasyTier/tree/v2.6.4/easytier-gui)
 - [Android VPN 开发指南](https://developer.android.com/develop/connectivity/vpn)
 - [Android 14 前台服务类型要求](https://developer.android.com/about/versions/14/changes/fgs-types-required)
-

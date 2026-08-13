@@ -201,8 +201,15 @@ function Wait-ServiceDeletion {
     do {
         $remaining = Get-Service -Name $Name -ErrorAction SilentlyContinue
         $registryExists = Test-ServiceRegistrationExists -Name $Name
-        if ($null -eq $remaining -and -not $registryExists) {
+        if (-not $registryExists) {
+            if ($null -ne $remaining) {
+                $remaining.Dispose()
+                Write-Warning "SCM is still finalizing deletion of $Name. Windows may require a restart before the service name can be reused."
+            }
             return
+        }
+        if ($null -ne $remaining) {
+            $remaining.Dispose()
         }
         Start-Sleep -Milliseconds 250
     }
@@ -230,6 +237,20 @@ if ($null -eq $service) {
         Remove-BandwidthFirewallRule
     }
     Write-Output "Service $ServiceName is not registered."
+    return
+}
+
+if (-not (Test-ServiceRegistrationExists -Name $ServiceName)) {
+    # A previous delete already removed the persistent registration. Do not
+    # reject uninstall solely because SCM still exposes a transient object.
+    $service.Dispose()
+    if (-not $KeepRegistration) {
+        if (-not $DryRun) {
+            Assert-Administrator
+        }
+        Remove-BandwidthFirewallRule
+    }
+    Write-Warning "Service $ServiceName is pending deletion. Windows may require a restart before it can be installed again."
     return
 }
 

@@ -214,6 +214,15 @@ function Get-ServiceImagePath {
     return [string](Get-ItemProperty -LiteralPath $registryPath -Name ImagePath).ImagePath
 }
 
+function Test-ServiceRegistrationExists {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    return Test-Path -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+}
+
 function Test-ServiceImageOwnership {
     param(
         [AllowNull()]
@@ -432,6 +441,18 @@ $StateDirectory = [System.IO.Path]::GetFullPath($StateDirectory)
 $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 $existingServiceOwnedByThisInstall = $false
 $existingImagePath = $null
+if ($null -ne $existingService -and -not (Test-ServiceRegistrationExists -Name $ServiceName)) {
+    # SCM can keep a stopped service object alive after its registry record has
+    # been deleted. It cannot be updated or recreated until the last open
+    # service handle is released, which normally happens after a reboot.
+    $existingService.Dispose()
+    Start-Sleep -Milliseconds 250
+    $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($null -ne $existingService) {
+        $existingService.Dispose()
+        throw "Service $ServiceName is still pending deletion. Restart Windows, then run this installer again."
+    }
+}
 if ($null -ne $existingService) {
     $existingImagePath = Get-ServiceImagePath -Name $ServiceName
     $existingServiceOwnedByThisInstall = Test-ServiceImageOwnership -ImagePath $existingImagePath -ExpectedBinaryPath $ServiceBinaryPath

@@ -21,7 +21,7 @@ public final class BootReceiver extends BroadcastReceiver {
             return;
         }
         if (VpnService.prepare(context) != null) {
-            preferences.writeStatus("FAILED", "需要重新授予系统 VPN 权限", 0, 0, 0);
+            preferences.writeStatus("FAILED", "需要重新授予系统 VPN 权限", 0, 0, 0, 0, 0, 0);
             return;
         }
         Intent service = EasyTierVpnService.connectIntent(context, false);

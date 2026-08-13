@@ -21,6 +21,7 @@ import com.vibeeasytier.a14.config.TomlProfileCodec;
 import com.vibeeasytier.a14.core.Ipv4Cidr;
 import com.vibeeasytier.a14.core.NetworkSnapshot;
 import com.vibeeasytier.a14.core.NetworkStatusParser;
+import com.vibeeasytier.a14.core.PeerSnapshot;
 import com.vibeeasytier.a14.core.RetryPolicy;
 import com.vibeeasytier.a14.model.Profile;
 import com.vibeeasytier.a14.model.ProfileValidator;
@@ -39,7 +40,7 @@ public final class EasyTierVpnService extends VpnService {
     public static final String ACTION_STOP = "com.vibeeasytier.a14.STOP";
     public static final String ACTION_STATUS = "com.vibeeasytier.a14.STATUS";
     public static final String INTERNAL_STATUS_PERMISSION = "com.vibeeasytier.a14.permission.INTERNAL_STATUS";
-    public static final String EXTRA_NODES = "nodes";
+    public static final String EXTRA_PEERS = "peers";
     private static final String EXTRA_USER_INITIATED = "user_initiated";
     private static final String CHANNEL_ID = "vibe_vpn";
     private static final int NOTIFICATION_ID = 11010;
@@ -60,7 +61,10 @@ public final class EasyTierVpnService extends VpnService {
     private long connectionStartedAt;
     private long lastNoPeerRestartAt;
     private long lastSuccess;
-    private List<String> nodes = List.of();
+    private List<PeerSnapshot> peers = List.of();
+    private int routeCount;
+    private long sentBytes;
+    private long receivedBytes;
 
     public static Intent connectIntent(Context context, boolean userInitiated) {
         return new Intent(context, EasyTierVpnService.class)
@@ -111,7 +115,7 @@ public final class EasyTierVpnService extends VpnService {
         if (ACTION_STOP.equals(action)) {
             if (isAlwaysOn()) {
                 preferences.setAlwaysOn(true);
-                updateState("CONNECTED", "Always-on VPN 已启用，请在系统设置中断开", nodes.size(), 0);
+                updateState("CONNECTED", "Always-on VPN 已启用，请在系统设置中断开", peers.size(), 0);
                 return START_STICKY;
             }
             preferences.setAutoConnect(false);
@@ -232,7 +236,10 @@ public final class EasyTierVpnService extends VpnService {
             coreRunning = true;
             retryAttempt = 0;
             connectionStartedAt = System.currentTimeMillis();
-            nodes = List.of();
+            peers = List.of();
+            routeCount = 0;
+            sentBytes = 0;
+            receivedBytes = 0;
             logs.append("EasyTier Core 已启动，正在等待远端节点");
             updateState("CONNECTING", "Core 已运行，正在等待远端节点", 0, 0);
         } catch (Exception | LinkageError error) {
@@ -276,7 +283,26 @@ public final class EasyTierVpnService extends VpnService {
                 throw new IllegalStateException(snapshot.error().isBlank()
                         ? "Core 网络实例已停止" : snapshot.error());
             }
-            nodes = snapshot.nodes();
+            if (snapshot.peerCount() == 0) {
+                peers = List.of();
+            } else {
+                java.util.LinkedHashMap<String, PeerSnapshot> merged = new java.util.LinkedHashMap<>();
+                for (PeerSnapshot peer : peers) {
+                    merged.put(peer.id(), peer);
+                }
+                for (PeerSnapshot peer : snapshot.peers()) {
+                    merged.put(peer.id(), peer);
+                }
+                java.util.HashSet<String> active = new java.util.HashSet<>();
+                for (PeerSnapshot peer : snapshot.peers()) {
+                    active.add(peer.id());
+                }
+                merged.keySet().retainAll(active);
+                peers = List.copyOf(merged.values());
+            }
+            routeCount = snapshot.routeCount();
+            sentBytes = snapshot.sentBytes();
+            receivedBytes = snapshot.receivedBytes();
             if (snapshot.peerCount() > 0) {
                 if (lastSuccess == 0) {
                     logs.append("私有网络连接成功");
@@ -333,7 +359,10 @@ public final class EasyTierVpnService extends VpnService {
     private synchronized void stopRuntime() {
         coreRunning = false;
         currentProfile = null;
-        nodes = List.of();
+        peers = List.of();
+        routeCount = 0;
+        sentBytes = 0;
+        receivedBytes = 0;
         if (tunInterface != null) {
             try {
                 tunInterface.close();
@@ -373,10 +402,15 @@ public final class EasyTierVpnService extends VpnService {
 
     private void updateState(String state, String detail, int peerCount, long retryAt) {
         preferences.setAlwaysOn(isAlwaysOn());
-        preferences.writeStatus(state, detail, peerCount, lastSuccess, retryAt);
+        preferences.writeStatus(
+                state, detail, peerCount, routeCount, sentBytes, receivedBytes, lastSuccess, retryAt);
+        java.util.ArrayList<String> transportPeers = new java.util.ArrayList<>();
+        for (PeerSnapshot peer : peers) {
+            transportPeers.add(peer.toTransportJson());
+        }
         Intent broadcast = new Intent(ACTION_STATUS)
                 .setPackage(getPackageName())
-                .putStringArrayListExtra(EXTRA_NODES, new java.util.ArrayList<>(nodes));
+                .putStringArrayListExtra(EXTRA_PEERS, transportPeers);
         sendBroadcast(broadcast, INTERNAL_STATUS_PERMISSION);
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.notify(NOTIFICATION_ID, buildNotification(notificationText(state, detail, peerCount)));

@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import com.vibeeasytier.a14.config.TomlProfileCodec;
+
 public final class ProfileValidator {
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9_-]{1,64}");
     private static final Set<String> PEER_SCHEMES = Set.of("tcp", "udp", "wg", "ws", "wss");
@@ -53,11 +55,17 @@ public final class ProfileValidator {
         if (Boolean.TRUE.equals(profile.flags().get("enable_exit_node"))) {
             fail("Android 首版不支持出口节点");
         }
+        if (Boolean.TRUE.equals(profile.flags().get("enable_udp_broadcast_relay"))) {
+            fail("Android 不支持 Windows UDP 广播转发");
+        }
         validateFlags(profile.flags());
     }
 
     private static void validateFlags(Map<String, Object> flags) {
         for (Map.Entry<String, Object> entry : flags.entrySet()) {
+            if (!TomlProfileCodec.FLAG_KEYS.contains(entry.getKey())) {
+                fail("不支持 flags." + entry.getKey());
+            }
             Object value = entry.getValue();
             if (STRING_FLAGS.contains(entry.getKey())) {
                 if (!(value instanceof String)) {
@@ -80,12 +88,22 @@ public final class ProfileValidator {
             fail("flags.mtu 必须在 576-9000 之间");
         }
         long threads = numberFlag(flags, "multi_thread_count");
-        if (threads < 1 || threads > 64) {
-            fail("flags.multi_thread_count 必须在 1-64 之间");
+        if (threads < 2 || threads > 128) {
+            fail("flags.multi_thread_count 必须在 2-128 之间");
         }
         long compression = numberFlag(flags, "data_compress_algo");
         if (compression != 1 && compression != 2) {
             fail("flags.data_compress_algo 仅支持 1 或 2");
+        }
+        long quicPort = numberFlag(flags, "quic_listen_port");
+        if (quicPort < 0 || quicPort > 4294967295L) {
+            fail("flags.quic_listen_port 必须是 32 位无符号整数");
+        }
+        for (String rate : Set.of("foreign_relay_bps_limit", "instance_recv_bps_limit")) {
+            Object value = flags.get(rate);
+            if (value != null && (!(value instanceof Number) || ((Number) value).longValue() < 0)) {
+                fail("flags." + rate + " 必须是非负整数");
+            }
         }
         String algorithm = (String) flags.get("encryption_algorithm");
         if (!Set.of("", "xor", "aes-gcm", "aes-256-gcm", "chacha20").contains(algorithm)) {

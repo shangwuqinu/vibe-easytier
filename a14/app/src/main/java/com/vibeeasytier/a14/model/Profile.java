@@ -74,6 +74,7 @@ public final class Profile {
         values.put("enable_quic_proxy", false);
         values.put("disable_quic_input", false);
         values.put("disable_relay_quic", false);
+        values.put("quic_listen_port", 4294967295L);
         values.put("multi_thread_count", 2L);
         values.put("enable_relay_foreign_network_kcp", false);
         values.put("enable_relay_foreign_network_quic", false);
@@ -99,4 +100,3 @@ public final class Profile {
     public List<String> peers() { return peers; }
     public Map<String, Object> flags() { return flags; }
 }
-

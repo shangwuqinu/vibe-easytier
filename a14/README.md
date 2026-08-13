@@ -7,10 +7,17 @@
 
 ## 已实现
 
-- 概览、私网、节点、日志、设置五个可滚动页面，支持系统深浅色主题。
+- 概览、私网、节点、日志、设置五个可滚动页面，支持系统、浅色和深色主题。
+- 多档案新建、切换、重命名和删除；只允许一个活动档案自动连接，旧版单档案
+  会在首次读取时迁移到加密档案集合。
 - 固定虚拟 IPv4/CIDR、加密私网、最多 8 个 Bootstrap 节点，以及 TCP、
   UDP、WireGuard、WS、WSS 多协议地址。
-- Android Keystore AES-GCM 加密档案、原子写入、本地 TOML 导入/导出。
+- Android Keystore AES-GCM 加密档案、原子写入、本地 TOML 导入/导出；保存前
+  先交给内置 Core 校验，错误配置不会覆盖当前可用档案。
+- 设置页展示 EasyTier Core 2.6.4 的全部 41 项 `[flags]`，使用中文名称和说明；
+  加密、私有模式、TUN、出口节点和 Windows 广播项按 Android 安全边界锁定。
+- 概览和节点页展示路由、收发字节、虚拟地址、活动协议、延迟和 Core 版本；
+  日志页支持搜索和清空。
 - 前台 `VpnService`、持久通知、开机广播、Always-on VPN 声明、网络恢复和
   最长 5 分钟的抖动指数退避；手动断开同时清除自动连接意图。
 - Core 存活但无节点与 Core 停止分别展示；连续 10 分钟无节点时受控重启，
@@ -48,4 +55,5 @@ APK 位于 `a14/app/build/outputs/apk/debug/app-debug.apk`。Debug 与 Release �
 5. 在至少两种 Android 14 厂商 ROM 上关闭与开启电池限制各跑一轮。
 
 详细边界见 [FEASIBILITY.md](FEASIBILITY.md)。
+与 Windows 当前功能的逐项校验见 [FEATURE_PARITY.md](FEATURE_PARITY.md)。
 第三方运行库的发布义务见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

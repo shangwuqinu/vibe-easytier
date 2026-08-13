@@ -1,5 +1,7 @@
 # Vibe EasyTier
 
+[![Build Windows and Android Clients](https://github.com/shangwuqinu/vibe-easytier/actions/workflows/verify-windows.yml/badge.svg?branch=master)](https://github.com/shangwuqinu/vibe-easytier/actions/workflows/verify-windows.yml)
+
 Vibe EasyTier provides focused clients for a deliberately small EasyTier
 private virtual-LAN workflow. The primary Windows x64 desktop process owns
 neither `easytier-core` nor its management endpoint: `VibeEasyTierService` is
@@ -9,6 +11,7 @@ The repository also contains an Android 14 arm64 implementation under
 [`a14`](a14/README.md). It preserves the private-network profile and recovery
 semantics while replacing the Windows service boundary with Android
 `VpnService` and the official EasyTier v2.6.4 JNI layer. See its
+[feature parity matrix](a14/FEATURE_PARITY.md) and
 [feasibility assessment](a14/FEASIBILITY.md) before treating boot connection as
 equivalent across consumer Android firmware.
 
@@ -115,6 +118,12 @@ The generated EasyTier and iperf3 runtime directories are ignored by Git. A
 clean checkout, including the Windows CI runner, must execute both runtime
 fetch scripts before using `-RequireRuntime`; keep the workflow and Tauri
 resource mappings synchronized when either runtime changes.
+
+Every push to `master` or `main` runs GitHub Actions in parallel. A successful
+run publishes the Windows x64 NSIS installer and the Android 14 arm64 debug APK
+as workflow artifacts retained for 14 days. The Android job builds the pinned
+EasyTier JNI libraries before packaging and verifies that both native libraries
+are present in the APK.
 
 Do not place profile TOML files or private-network secrets under `resources`.
 They belong to the protected service state beneath `%ProgramData%\VibeEasyTier`.

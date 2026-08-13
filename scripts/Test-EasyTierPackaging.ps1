@@ -99,6 +99,14 @@ foreach ($scriptName in $scriptNames) {
     Assert-PowerShellSyntax -Path $scriptPath
 }
 
+foreach ($fetchScriptName in @('Fetch-EasyTierRuntime.ps1', 'Fetch-Iperf3Runtime.ps1')) {
+    $fetchScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot $fetchScriptName) -Raw
+    if ($fetchScript.IndexOf('$env:GITHUB_TOKEN', [StringComparison]::Ordinal) -lt 0 -or
+        $fetchScript.IndexOf("`$headers['Authorization']", [StringComparison]::Ordinal) -lt 0) {
+        throw "$fetchScriptName must authenticate GitHub API metadata requests when Actions provides GITHUB_TOKEN."
+    }
+}
+
 $fragmentPath = Join-Path $repositoryRoot "installer\tauri-nsis.$Architecture.fragment.json"
 Assert-File -Path $fragmentPath -Description 'Tauri NSIS fragment'
 $fragment = Get-Content -LiteralPath $fragmentPath -Raw | ConvertFrom-Json
@@ -203,6 +211,9 @@ if ($registerScript.IndexOf('Resolve-InteractiveOwnerSid', [StringComparison]::O
 if ($registerScript.IndexOf('Get-ServiceOwnerSid', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('existingServiceOwnedByThisInstall', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service registration must preserve the established pipe owner when an authorized upgrade runs under a different administrator.'
 }
+if ($registerScript.IndexOf('pending deletion. Restart Windows', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('Test-ServiceRegistrationExists', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Service registration must diagnose an SCM object whose persistent registration has already been deleted.'
+}
 if ($registerScript -notmatch '(?s)\[string\]\$StateDirectory\s*=\s*\(Join-Path\s+\$env:ProgramData\s+''VibeEasyTier''\)') {
     throw 'Service registration must default protected state to ProgramData when called by NSIS hooks.'
 }
@@ -213,6 +224,9 @@ if ($unregisterScript.IndexOf('Wait-ServiceDeletion', [StringComparison]::Ordina
 }
 if ($unregisterScript.IndexOf('KeepRegistration', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service removal must support upgrade-only stop behavior that preserves the established SCM registration.'
+}
+if ($unregisterScript.IndexOf('SCM is still finalizing deletion', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Service removal must allow uninstall to finish after SCM has removed the persistent registration.'
 }
 if ($registerScript.IndexOf('New-NetFirewallRule', [StringComparison]::Ordinal) -lt 0 -or $registerScript.IndexOf('29999', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service registration must allow the node-to-node bandwidth test through Windows Firewall.'

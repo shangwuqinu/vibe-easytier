@@ -61,4 +61,26 @@ public class TomlProfileCodecTest {
 
         assertThrows(IllegalArgumentException.class, () -> TomlProfileCodec.parse(toml, "Pixel"));
     }
+
+    @Test
+    public void importsWindowsUnlimitedRateSentinelsWithoutSignedOverflow() {
+        String toml = """
+                instance_name = "phone"
+                hostname = "Pixel"
+                ipv4 = "100.76.1.8/24"
+                [network_identity]
+                network_name = "private"
+                network_secret = "secret"
+                [[peer]]
+                uri = "tcp://seed.example.com:11010"
+                [flags]
+                foreign_relay_bps_limit = 18446744073709551615
+                instance_recv_bps_limit = 18446744073709551615
+                """;
+
+        Profile profile = TomlProfileCodec.parse(toml, "Pixel");
+
+        assertTrue(!profile.flags().containsKey("foreign_relay_bps_limit"));
+        assertTrue(!profile.flags().containsKey("instance_recv_bps_limit"));
+    }
 }

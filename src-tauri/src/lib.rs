@@ -411,6 +411,7 @@ struct UiPreferences {
 struct ServiceBootStatus {
     configured: bool,
     running: bool,
+    registration_incomplete: bool,
 }
 
 impl ServiceBootStatus {
@@ -421,6 +422,15 @@ impl ServiceBootStatus {
             "attention"
         } else {
             "unavailable"
+        }
+    }
+
+    fn unavailable_error(self, rpc_error: String) -> String {
+        if self.registration_incomplete {
+            "Windows 后台服务注册不完整或正在等待删除。请重启 Windows，然后重新运行当前版本安装包进行修复。"
+                .to_owned()
+        } else {
+            rpc_error
         }
     }
 }
@@ -915,9 +925,10 @@ fn core_log_level(message: &str) -> &'static str {
 fn unavailable_snapshot(
     theme: String,
     service_boot: ServiceBootStatus,
-    error: String,
+    rpc_error: String,
     mut logs: Vec<UiLog>,
 ) -> DesktopSnapshot {
+    let error = service_boot.unavailable_error(rpc_error);
     logs.insert(
         0,
         UiLog::new("warning", "Desktop", format!("后台服务状态不可用：{error}")),
@@ -1254,21 +1265,29 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn service_boot_status() -> ServiceBootStatus {
-    let configured = sc_output(["qc", WINDOWS_SERVICE_NAME])
-        .ok()
+    let configuration = sc_output(["qc", WINDOWS_SERVICE_NAME]).ok();
+    let query = sc_output(["query", WINDOWS_SERVICE_NAME]).ok();
+    let configured = configuration
+        .as_ref()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).to_ascii_uppercase())
         .is_some_and(|configuration| {
             configuration.contains("AUTO_START") && configuration.contains("DELAYED")
         });
-    let running = sc_output(["query", WINDOWS_SERVICE_NAME])
-        .ok()
+    let service_exists = query.as_ref().is_some_and(|output| output.status.success());
+    let running = query
+        .as_ref()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).to_ascii_uppercase())
         .is_some_and(|state| state.contains("RUNNING") || state.contains("STATE              : 4"));
+    let registration_incomplete = service_exists
+        && configuration
+            .as_ref()
+            .is_none_or(|output| !output.status.success());
     ServiceBootStatus {
         configured,
         running,
+        registration_incomplete,
     }
 }
 
@@ -1291,6 +1310,7 @@ fn service_boot_status() -> ServiceBootStatus {
     ServiceBootStatus {
         configured: false,
         running: false,
+        registration_incomplete: false,
     }
 }
 
@@ -1411,6 +1431,26 @@ mod tests {
         ));
         assert!(missing.contains("iperf3"));
         assert!(!missing.contains("secret-install-path"));
+    }
+
+    #[test]
+    fn incomplete_windows_service_registration_has_an_actionable_error() {
+        let service_boot = ServiceBootStatus {
+            configured: false,
+            running: false,
+            registration_incomplete: true,
+        };
+        let snapshot = unavailable_snapshot(
+            "system".to_owned(),
+            service_boot,
+            "无法连接后台服务。".to_owned(),
+            Vec::new(),
+        );
+
+        let error = snapshot.runtime.error.unwrap();
+        assert!(error.contains("服务注册不完整"));
+        assert!(error.contains("重启 Windows"));
+        assert!(snapshot.logs[0].message.contains(&error));
     }
 
     #[test]
