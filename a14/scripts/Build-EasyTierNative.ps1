@@ -107,7 +107,7 @@ if (-not (Test-Path -LiteralPath $NdkClang)) {
 }
 $env:CLANG_PATH = $NdkClang
 
-& cargo ndk --version *> $null
+& rustup run $RustToolchain cargo ndk --version *> $null
 if ($LASTEXITCODE -ne 0) {
     throw '未安装 cargo-ndk。请先执行 cargo install cargo-ndk --locked。'
 }
@@ -134,7 +134,7 @@ foreach ($Path in @($FfiPath, $JniPath)) {
 
 Push-Location $FfiPath
 try {
-    & cargo ndk -t $AndroidAbi build --release --locked
+    & rustup run $RustToolchain cargo ndk -t $AndroidAbi build --release --locked
     if ($LASTEXITCODE -ne 0) { throw 'easytier-ffi Android 构建失败。' }
 }
 finally {
@@ -148,7 +148,7 @@ try {
     $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS = if ($PreviousTargetRustFlags) {
         "$PreviousTargetRustFlags $FfiLinkFlags"
     } else { $FfiLinkFlags }
-    & cargo ndk -t $AndroidAbi build --release --locked
+    & rustup run $RustToolchain cargo ndk -t $AndroidAbi build --release --locked
     if ($LASTEXITCODE -ne 0) { throw 'easytier-android-jni 构建失败。' }
 }
 finally {
