@@ -246,6 +246,28 @@ if ($registerScript.IndexOf('Node bandwidth tests may be blocked.', [StringCompa
 if ($unregisterScript.IndexOf('Remove-BandwidthFirewallRule', [StringComparison]::Ordinal) -lt 0) {
     throw 'Service removal must clean up the node-to-node bandwidth firewall rule.'
 }
+
+$workflowPath = Join-Path $repositoryRoot '.github\workflows\verify-windows.yml'
+Assert-File -Path $workflowPath -Description 'GitHub build and release workflow'
+$workflow = Get-Content -LiteralPath $workflowPath -Raw
+foreach ($requiredFragment in @(
+        "if: github.event_name == 'push'",
+        'needs: [windows, android]',
+        'contents: write',
+        'actions/download-artifact@v5',
+        'gh release create "$RELEASE_TAG"',
+        '--target "$GITHUB_SHA"',
+        '--latest'
+    )) {
+    if ($workflow.IndexOf($requiredFragment, [StringComparison]::Ordinal) -lt 0) {
+        throw "GitHub workflow is missing automatic push-release behavior: $requiredFragment"
+    }
+}
+if ($workflow.IndexOf('merge-multiple: true', [StringComparison]::Ordinal) -lt 0 -or
+    $workflow.IndexOf('*.exe', [StringComparison]::Ordinal) -lt 0 -or
+    $workflow.IndexOf('*.apk', [StringComparison]::Ordinal) -lt 0) {
+    throw 'GitHub releases must include both the verified Windows installer and Android APK.'
+}
 foreach ($serviceScript in @($registerScript, $unregisterScript)) {
     if ($serviceScript -match '[^\x00-\x7F]') {
         throw 'Service scripts must remain ASCII so Windows PowerShell 5.1 cannot misparse UTF-8 text without a BOM.'

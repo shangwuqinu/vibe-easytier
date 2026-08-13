@@ -1,4 +1,4 @@
-name: Build Windows and Android Clients
+name: Build and Release Windows and Android Clients
 
 on:
   push:
@@ -184,3 +184,69 @@ jobs:
           path: a14/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push'
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download verified build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: vibe-easytier-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare versioned release assets
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          if [[ -z "$version" || "$version" == "null" ]]; then
+            echo "Tauri product version is missing." >&2
+            exit 1
+          fi
+
+          tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          installer="$(find release-assets -type f -name '*.exe' -print -quit)"
+          apk="$(find release-assets -type f -name '*.apk' -print -quit)"
+          if [[ -z "$installer" || -z "$apk" ]]; then
+            echo "The Windows installer or Android APK is missing." >&2
+            exit 1
+          fi
+
+          installer_asset="release-assets/Vibe-EasyTier-${tag}-windows-x64-setup.exe"
+          android_asset="release-assets/Vibe-EasyTier-${tag}-android14-arm64.apk"
+          mv "$installer" "$installer_asset"
+          mv "$apk" "$android_asset"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "installer=$installer_asset" >> "$GITHUB_OUTPUT"
+          echo "android=$android_asset" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          WINDOWS_ASSET: ${{ steps.release.outputs.installer }}
+          ANDROID_ASSET: ${{ steps.release.outputs.android }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$WINDOWS_ASSET" "$ANDROID_ASSET" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$WINDOWS_ASSET" "$ANDROID_ASSET" \
+              --target "$GITHUB_SHA" \
+              --title "Vibe EasyTier ${RELEASE_VERSION} (build ${GITHUB_RUN_NUMBER})" \
+              --generate-notes \
+              --latest
+          fi
