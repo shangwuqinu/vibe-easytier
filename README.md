@@ -1,129 +1,101 @@
 # Vibe EasyTier
 
-[![Build Windows and Android Clients](https://github.com/shangwuqinu/vibe-easytier/actions/workflows/verify-windows.yml/badge.svg?branch=master)](https://github.com/shangwuqinu/vibe-easytier/actions/workflows/verify-windows.yml)
+[![Build and Release](https://github.com/shangwuqinu/vibe-easytier/actions/workflows/verify-windows.yml/badge.svg?branch=master)](https://github.com/shangwuqinu/vibe-easytier/actions/workflows/verify-windows.yml)
+[![Latest Release](https://img.shields.io/github/v/release/shangwuqinu/vibe-easytier?label=%E4%B8%8B%E8%BD%BD%E6%9C%80%E6%96%B0%E7%89%88)](https://github.com/shangwuqinu/vibe-easytier/releases/latest)
 
-Vibe EasyTier provides focused clients for a deliberately small EasyTier
-private virtual-LAN workflow. The primary Windows x64 desktop process owns
-neither `easytier-core` nor its management endpoint: `VibeEasyTierService` is
-the sole supervisor for the pinned core process.
+Vibe EasyTier 是一个面向私有虚拟局域网的 EasyTier 客户端，提供 Windows x64
+桌面版和 Android 14 arm64 版。产品专注于稳定完成两件事：**设备启动后自动运行**，
+以及**持续连接指定的私有网络**。
 
-The repository also contains an Android 14 arm64 implementation under
-[`a14`](a14/README.md). It preserves the private-network profile and recovery
-semantics while replacing the Windows service boundary with Android
-`VpnService` and the official EasyTier v2.6.4 JNI layer. See its
-[feature parity matrix](a14/FEATURE_PARITY.md) and
-[feasibility assessment](a14/FEASIBILITY.md) before treating boot connection as
-equivalent across consumer Android firmware.
+内置运行时固定为 EasyTier Core 2.6.4。客户端不尝试覆盖 EasyTier 的所有场景，
+而是把档案管理、连接恢复、节点观测和安全存储组合成一套日常可用的运维界面。
 
-## Guarantees
+## 核心功能
 
-- The NSIS installer creates `VibeEasyTierService` as a delayed automatic
-  LocalSystem service and configures Windows failure recovery.
-- Automatic connection is a durable profile intent. A manual disconnect clears
-  that intent before stopping the core, so background recovery does not undo a
-  user action. Service start, network recovery, and resume use jittered
-  exponential recovery capped at five minutes.
-- Profiles use fixed virtual IPv4 CIDRs, a private network name and secret,
-  and explicit bootstrap peers. Settings exposes all 41 `EasyTier v2.6.4`
-  `[flags]` options with Chinese names and descriptions, including the
-  deprecated QUIC listen-port compatibility option. The UI and TOML importer
-  still reject non-`[flags]` portal, subnet-routing, proxy, port-forward, and
-  configuration-server surfaces. `wg://host:port` is allowed as an EasyTier
-  peer transport; it is distinct from the deliberately unsupported WireGuard
-  `vpn_portal` server option.
-- The service launches the core with `--rpc-portal 127.0.0.1:15888` and a
-  loopback whitelist. The desktop UI never calls that port; it uses the
-  service-owned named pipe instead.
-- Route and traffic cards are sampled from the pinned `easytier-cli` `route
-  list` and `stats show` commands. Profile export is requested through the
-  protected pipe and written by native Tauri code, so the complete TOML and
-  its network secret never enter webview state.
-- Node bandwidth tests use bundled iperf3 3.21 clients and a supervised
-  iperf3 server. Upload and reverse-download tests run sequentially, with both
-  ends bound to their EasyTier virtual IPv4 addresses. Both nodes need this
-  Vibe service version; the installer scopes TCP 29999 to `iperf3.exe` in
-  Windows Firewall and removes the rule on uninstall. Service-owned executable
-  directories allow normal users to read and run binaries but not replace
-  LocalSystem child executables. Server startup prepares a kill-on-close
-  Windows Job Object before launching iperf3 and terminates a child that cannot
-  be assigned, so a failed startup cannot leave a stale listener behind.
-- Network secrets are encrypted in service-owned state with Windows DPAPI.
-  The service writes the active secret only to an ACL-protected runtime TOML,
-  keeping it out of the core process command line. The desktop UI gets a
-  secret-free profile view through a SID-restricted local named pipe. The
-  LocalSystem service owns that pipe and flushes each response before the
-  single-request connection is closed.
-- Service registration derives the pipe owner from the interactive desktop,
-  not an over-the-shoulder UAC account. Uninstall removes both the service and
-  the protected `%ProgramData%\VibeEasyTier` state; version upgrades preserve
-  that state.
+### 开机启动与自动连接
 
-## Local Trust Boundary
+- Windows 安装程序注册延迟自动启动的 `VibeEasyTierService`，无需等待用户登录即可
+  启动 Core 并连接活动私网。
+- 自动连接保存的是长期用户意图。服务启动、网络恢复和睡眠唤醒都会重新尝试连接，
+  失败后使用带抖动的指数退避，最长等待 5 分钟。
+- Core 异常退出或 RPC 无响应时会受控重启；Core 正常但长期无远端节点时采用限频恢复，
+  避免频繁重启影响网络。
+- 手动断开会同时关闭自动连接，后台不会擅自重新拉起连接。
+- 关闭 Windows 窗口后应用进入托盘，后台服务继续维持私网。
 
-EasyTier v2.6.4 has no authenticated per-Windows-SID authorization for its
-upstream management RPC. Binding it to loopback keeps it off the LAN, but it
-does not fully isolate separate local Windows accounts that can reach
-`127.0.0.1`. The supported desktop management path remains the ACL-protected
-named pipe. Use a separate Windows instance or upstream RPC authentication for
-shared-host account isolation.
+### 私有网络档案
 
-## Layout
+- 管理多个私网档案，并指定唯一的活动档案用于自动连接。
+- 配置档案名称、设备名称、网络名称、网络密钥和固定虚拟 IPv4/CIDR。
+- Windows 设备名称留空时自动使用本机计算机名称。
+- 每个档案最多添加 8 个 Bootstrap 地址，支持 `tcp://`、`udp://`、`wg://`、
+  `ws://` 和 `wss://`。
+- 同一 Bootstrap 节点可以配置多个协议地址，Core 会尝试并维护可用传输；节点页
+  会同时展示实际建立连接的一个或多个协议。
+- 从本地 TOML 文件导入或导出档案。导入只接受允许的私网字段，并在替换现有配置前
+  交给内置 Core 校验；错误配置不会破坏当前可用连接。
 
-- `apps/desktop`: React + TypeScript operational UI.
-- `src-tauri`: Tauri 2 shell, native tray behavior, and the desktop-to-service
-  command boundary.
-- `crates/vibe-easytier-service`: persisted desired state, DPAPI envelope,
-  ACL helpers, local IPC, profile parsing, and child-process supervisor.
-- `scripts` and `installer`: pinned runtime staging plus per-machine NSIS
-  registration hooks.
-- `a14`: Android 14 application, secure profile store, `VpnService`, tests,
-  and pinned EasyTier JNI staging script.
+> 导出的 TOML 包含私网密钥，请将文件存放在可信位置。
 
-## Local Development
+### 状态、节点与日志
 
-Install Rust stable plus Visual Studio Build Tools with the MSVC desktop C++
-workload, then run:
+| 页面 | 主要功能 |
+| --- | --- |
+| 概览 | 查看开机服务健康度、自动连接状态、活动档案、路由数、收发流量、节点数、最近成功时间和重试时间 |
+| 私有网络 | 新建、编辑、选择、删除、导入和导出档案，并执行连接或断开 |
+| 节点 | 查看节点名称、虚拟地址、状态、角色、活动协议、延迟和 Core 版本；Windows 支持 iperf3 上传/下载测速 |
+| 日志 | 查看带级别标记的完整日志并进行搜索，保留 Core 多行日志的整体结构，并支持清空 |
+| 设置 | 切换系统、浅色或深色主题，控制自动连接，并配置 EasyTier 2.6.4 的全部 41 项 `[flags]` |
 
-```powershell
-npm --prefix .\apps\desktop ci
-npm --prefix .\apps\desktop run build
-cargo test -p vibe-easytier-service
-pwsh -NoProfile -File .\scripts\Fetch-EasyTierRuntime.ps1 -Architecture x64
-pwsh -NoProfile -File .\scripts\Fetch-Iperf3Runtime.ps1 -Architecture x64
-cargo build --release -p vibe-easytier-service --target x86_64-pc-windows-msvc
-pwsh -NoProfile -File .\scripts\Stage-VibeEasyTierService.ps1 -Architecture x64
-npm --prefix .\apps\desktop run desktop:dev
-```
+### 配置与数据安全
 
-The native desktop intentionally does not start `easytier-core` itself. For a
-real-machine run, install the service through the NSIS package or invoke
-`Register-EasyTierService.ps1` from an elevated PowerShell session after the
-service executable has been staged.
+- Windows 使用 DPAPI 加密档案和连接意图，活动 TOML 仅写入受 ACL 保护的服务目录。
+- 桌面端通过受 ACL 保护的本地命名管道管理服务，不直接访问 Core 管理端口；Core RPC
+  仅监听 `127.0.0.1`。
+- 档案导出由原生层完成，包含密钥的完整 TOML 不进入 WebView 状态。
+- Android 使用 Android Keystore AES-GCM 加密档案，并通过 `VpnService` 承载 TUN。
 
-## Packaging
+## 平台支持
 
-EasyTier is locked to v2.6.4 and iperf3 is locked to 3.21 in their respective
-runtime manifests under `resources`. Validate both inputs before bundling:
+| 能力 | Windows x64 | Android 14 arm64 |
+| --- | --- | --- |
+| 开机自动连接 | Windows Service，可在登录前运行 | `VpnService` + 开机广播；建议在系统中启用“始终开启的 VPN” |
+| 多档案与单活动档案 | 支持 | 支持 |
+| TOML 导入/导出 | 支持 | 支持 |
+| 路由、流量和节点协议 | 支持 | 支持 |
+| 41 项 Core flags | 支持，中文说明 | 支持，Android 不适用项会锁定 |
+| 节点间 iperf3 测速 | 支持，内置 iperf3 3.21 | 暂不支持，避免测速流量绕过 VPN |
 
-```powershell
-pwsh -NoProfile -File .\scripts\Fetch-EasyTierRuntime.ps1 -Architecture x64
-pwsh -NoProfile -File .\scripts\Fetch-Iperf3Runtime.ps1 -Architecture x64
-cargo build --release -p vibe-easytier-service --target x86_64-pc-windows-msvc
-pwsh -NoProfile -File .\scripts\Stage-VibeEasyTierService.ps1 -Architecture x64
-pwsh -NoProfile -File .\scripts\Test-EasyTierPackaging.ps1 -Architecture x64 -RequireRuntime -RequireServiceBinary -VerifyReleaseMetadata
-npm --prefix .\apps\desktop run desktop:build
-```
+Android 厂商对后台进程和开机广播的限制并不一致。要获得最稳定的无人值守连接，
+请授予 VPN 权限、启用系统“始终开启的 VPN”，并按设备需要关闭电池优化。
 
-The generated EasyTier and iperf3 runtime directories are ignored by Git. A
-clean checkout, including the Windows CI runner, must execute both runtime
-fetch scripts before using `-RequireRuntime`; keep the workflow and Tauri
-resource mappings synchronized when either runtime changes.
+## 快速使用
 
-Every push to `master` or `main` runs GitHub Actions in parallel. A successful
-run publishes the Windows x64 NSIS installer and the Android 14 arm64 debug APK
-as workflow artifacts retained for 14 days. The Android job builds the pinned
-EasyTier JNI libraries before packaging and verifies that both native libraries
-are present in the APK.
+1. 从 [Releases](https://github.com/shangwuqinu/vibe-easytier/releases/latest)
+   下载 Windows x64 安装程序或 Android 14 arm64 APK。
+2. 创建私网档案，填写网络名称、网络密钥、固定虚拟 IP 和至少一个 Bootstrap 地址。
+3. 保存档案。配置会先由内置 Core 校验，失败原因会直接显示在界面中。
+4. 选择活动档案，开启“自动连接”，然后连接私网。
+5. 在“概览”和“节点”中确认已出现远端节点、活动协议、路由和流量。
 
-Do not place profile TOML files or private-network secrets under `resources`.
-They belong to the protected service state beneath `%ProgramData%\VibeEasyTier`.
+建议为生产私网部署至少两台长期在线的 Bootstrap/中继节点，并为每个客户端分配
+不冲突的固定虚拟 IP。
+
+## 功能边界
+
+Vibe EasyTier 聚焦加密私有虚拟局域网，不提供 WireGuard Portal、子网代理、
+端口转发、SOCKS、DNS Portal 和配置服务器等独立管理入口。
+
+`wg://host:port` 是受支持的 EasyTier 节点传输协议，不等同于 WireGuard
+`vpn_portal` 服务端功能。
+
+## 下载与文档
+
+- [下载最新版本](https://github.com/shangwuqinu/vibe-easytier/releases/latest)
+- [Android 14 使用与构建说明](a14/README.md)
+- [Windows 与 Android 功能对照](a14/FEATURE_PARITY.md)
+- [Android 14 可行性与平台限制](a14/FEASIBILITY.md)
+- [贡献者指南](AGENTS.md)
+
+推送到 `master` 或 `main` 后，GitHub Actions 会构建并验证 Windows 安装程序和
+Android APK；两个平台均成功后，工作流自动创建 tag 和 GitHub Release。
